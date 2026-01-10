@@ -41,8 +41,11 @@ impl Monitor {
         if tag_idx >= 32 {
             return;
         }
-        self.previous_tags = self.selected_tags;
-        self.selected_tags = 1 << tag_idx;
+        let new_selection = 1 << tag_idx;
+        if self.selected_tags != new_selection {
+            self.previous_tags = self.selected_tags;
+            self.selected_tags = new_selection;
+        }
     }
 
     pub fn toggle_tag(&mut self, tag_idx: u8) {
