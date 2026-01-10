@@ -95,4 +95,15 @@ impl State {
             }
         }
     }
+
+    pub fn find_monitor_by_window(&self, window_id: WindowId) -> Option<MonitorId> {
+        for monitor in self.monitors.values() {
+            for tag in &monitor.tags {
+                if tag.window_ids.contains(&window_id) {
+                    return Some(monitor.id);
+                }
+            }
+        }
+        None
+    }
 }

@@ -111,6 +111,8 @@ enum InternalCommand {
     HandleMoveMonitor(Option<AerospaceWindow>, Option<AerospaceMonitor>, String),
     HandleSync(
         anyhow::Result<Vec<AerospaceWindow>>,
+        anyhow::Result<Vec<AerospaceMonitor>>,
+        std::collections::HashMap<u32, String>,
         anyhow::Result<Option<AerospaceWorkspace>>,
         anyhow::Result<Option<AerospaceWindow>>,
         anyhow::Result<Option<AerospaceMonitor>>,
@@ -363,6 +365,17 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
             IpcCommand::Sync => {
                 // Fetch all needed info in parallel
                 let windows = aerospace::list_windows().await;
+                let monitors_result = aerospace::list_monitors().await;
+
+                let mut visible_workspaces = std::collections::HashMap::new();
+                if let Ok(ref monitors) = monitors_result {
+                    for m in monitors {
+                        if let Ok(ws) = aerospace::get_visible_workspace(m.monitor_id).await {
+                            visible_workspaces.insert(m.monitor_id, ws);
+                        }
+                    }
+                }
+
                 let fw_workspace = aerospace::get_focused_workspace().await;
                 let fw_window = aerospace::get_focused_window().await;
                 let fw_monitor = aerospace::get_focused_monitor().await;
@@ -370,6 +383,8 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
                 let _ = tx
                     .send(ManagerMessage::Internal(InternalCommand::HandleSync(
                         windows,
+                        monitors_result,
+                        visible_workspaces,
                         fw_workspace,
                         fw_window,
                         fw_monitor,
@@ -380,7 +395,6 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
         }
     });
 }
-
 fn handle_internal_command(
     state: &mut State,
     cmd: InternalCommand,
@@ -458,44 +472,62 @@ fn handle_internal_command(
         }
         InternalCommand::HandleLast(None) => tracing::warn!("No focused monitor found"),
 
-        InternalCommand::HandleMove(Some(w), Some(m), tag) => {
+        InternalCommand::HandleMove(Some(w), focused_monitor, tag) => {
             tracing::info!("Moving window to tag {}", tag);
-            let mut sync_data = None;
-            if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
-                for t in &mut monitor.tags {
-                    t.window_ids.retain(|&id| id != w.window_id);
-                }
-                if (tag as usize) < monitor.tags.len() {
-                    monitor.tags[tag as usize].window_ids.push(w.window_id);
-                }
-                sync_data = Some((
-                    monitor.tags.clone(),
-                    monitor.selected_tags,
-                    monitor.visible_workspace.clone(),
-                ));
+            let mut target_monitor_id = None;
+
+            // 1. Check which monitor currently owns this window
+            if let Some(mid) = state.find_monitor_by_window(w.window_id) {
+                target_monitor_id = Some(mid);
+            } else if let Some(m) = focused_monitor {
+                // 2. If not found, fall back to focused monitor
+                target_monitor_id = Some(m.monitor_id);
             }
 
-            if let Some((tags, selected_tags, visible_workspace)) = sync_data {
-                broadcast_state_change(state, m.monitor_id, event_tx);
-                let hidden_workspace = state.hidden_workspace.clone();
+            if let Some(mid) = target_monitor_id {
+                let mut sync_data = None;
+                if let Some(monitor) = state.get_monitor_mut(mid) {
+                    for t in &mut monitor.tags {
+                        t.window_ids.retain(|&id| id != w.window_id);
+                    }
+                    if (tag as usize) < monitor.tags.len() {
+                        monitor.tags[tag as usize].window_ids.push(w.window_id);
+                    }
+                    sync_data = Some((
+                        monitor.tags.clone(),
+                        monitor.selected_tags,
+                        monitor.visible_workspace.clone(),
+                    ));
+                }
 
-                state
-                    .windows
-                    .entry(w.window_id)
-                    .or_insert(state::WindowInfo {
-                        id: w.window_id,
-                        app_name: w.app_name,
-                        title: w.window_title,
-                    });
+                if let Some((tags, selected_tags, visible_workspace)) = sync_data {
+                    broadcast_state_change(state, mid, event_tx);
+                    let hidden_workspace = state.hidden_workspace.clone();
 
-                tokio::spawn(async move {
-                    sync_monitor_state(&tags, selected_tags, &visible_workspace, &hidden_workspace)
+                    state
+                        .windows
+                        .entry(w.window_id)
+                        .or_insert(state::WindowInfo {
+                            id: w.window_id,
+                            app_name: w.app_name,
+                            title: w.window_title,
+                        });
+
+                    tokio::spawn(async move {
+                        sync_monitor_state(
+                            &tags,
+                            selected_tags,
+                            &visible_workspace,
+                            &hidden_workspace,
+                        )
                         .await;
-                });
+                    });
+                }
+            } else {
+                tracing::warn!("No monitor found for window move");
             }
         }
         InternalCommand::HandleMove(None, _, _) => tracing::warn!("No focused window found"),
-        InternalCommand::HandleMove(_, None, _) => tracing::warn!("No focused monitor found"),
 
         InternalCommand::HandleMoveMonitor(Some(w), Some(current_monitor), target) => {
             tracing::info!("Moving window to monitor {}", target);
@@ -556,10 +588,117 @@ fn handle_internal_command(
             tracing::warn!("No focused monitor found")
         }
 
-        InternalCommand::HandleSync(Ok(windows), fw_workspace, fw_window, fw_monitor) => {
+        InternalCommand::HandleSync(
+            Ok(windows),
+            Ok(monitors),
+            visible_workspaces,
+            fw_workspace,
+            fw_window,
+            fw_monitor,
+        ) => {
             tracing::info!("Syncing windows");
             let mut changed_monitors = std::collections::HashSet::new();
             tracing::debug!("AeroSpace reported {} windows", windows.len());
+
+            // 0. Update monitors and handle removed ones
+            let current_monitor_ids: std::collections::HashSet<u32> =
+                monitors.iter().map(|m| m.monitor_id).collect();
+
+            // Add or update monitors
+            for m in monitors {
+                let visible_ws = visible_workspaces
+                    .get(&m.monitor_id)
+                    .cloned()
+                    .unwrap_or_else(|| m.monitor_id.to_string());
+
+                state
+                    .monitors
+                    .entry(m.monitor_id)
+                    .and_modify(|monitor| {
+                        if monitor.visible_workspace != visible_ws {
+                            tracing::info!(
+                                "Monitor {} visible workspace changed: {} -> {}",
+                                m.monitor_id,
+                                monitor.visible_workspace,
+                                visible_ws
+                            );
+                            monitor.visible_workspace = visible_ws.clone();
+                        }
+                    })
+                    .or_insert_with(|| {
+                        tracing::info!(
+                            "New monitor detected: {} (ws: {})",
+                            m.monitor_id,
+                            visible_ws
+                        );
+                        Monitor::new(m.monitor_id, m.monitor_name.clone(), visible_ws)
+                    });
+            }
+
+            let removed_monitor_ids: Vec<u32> = state
+                .monitors
+                .keys()
+                .filter(|id| !current_monitor_ids.contains(id))
+                .cloned()
+                .collect();
+
+            if !removed_monitor_ids.is_empty() {
+                // Find a rescue monitor (e.g., the one with the smallest ID)
+                let rescue_monitor_id = current_monitor_ids.iter().min().cloned();
+
+                if let Some(rescue_id) = rescue_monitor_id {
+                    tracing::info!(
+                        "Monitors {:?} removed. Rescuing windows to monitor {}",
+                        removed_monitor_ids,
+                        rescue_id
+                    );
+
+                    let mut rescued_windows = Vec::new();
+
+                    for &removed_id in &removed_monitor_ids {
+                        if let Some(monitor) = state.monitors.remove(&removed_id) {
+                            for tag in monitor.tags {
+                                for wid in tag.window_ids {
+                                    rescued_windows.push(wid);
+                                }
+                            }
+                        }
+                    }
+
+                    if !rescued_windows.is_empty() {
+                        if let Some(rescue_monitor) = state.get_monitor_mut(rescue_id) {
+                            let target_tag = rescue_monitor.selected_tags.trailing_zeros() as u8;
+                            for wid in rescued_windows {
+                                if (target_tag as usize) < rescue_monitor.tags.len() {
+                                    rescue_monitor.tags[target_tag as usize]
+                                        .window_ids
+                                        .push(wid);
+                                }
+                            }
+                            changed_monitors.insert(rescue_id);
+
+                            // Schedule sync for rescue monitor
+                            let tags = rescue_monitor.tags.clone();
+                            let selected_tags = rescue_monitor.selected_tags;
+                            let visible_workspace = rescue_monitor.visible_workspace.clone();
+                            let hidden_workspace = state.hidden_workspace.clone();
+
+                            tokio::spawn(async move {
+                                sync_monitor_state(
+                                    &tags,
+                                    selected_tags,
+                                    &visible_workspace,
+                                    &hidden_workspace,
+                                )
+                                .await;
+                            });
+                        }
+                    }
+                } else {
+                    tracing::error!("All monitors removed? Cannot rescue windows.");
+                    state.monitors.clear();
+                }
+            }
 
             // 1. Identify and remove closed windows
             let current_ids: std::collections::HashSet<u32> =
@@ -610,7 +749,9 @@ fn handle_internal_command(
                         }
                     }
 
-                    if assigned_monitor_id.is_none() {
+                    // If not found by workspace name, try to assign to focused monitor
+                    // BUT only if the window has no workspace (fresh window)
+                    if assigned_monitor_id.is_none() && w.workspace.is_none() {
                         assigned_monitor_id = focused_monitor_id;
                     }
 
@@ -627,11 +768,14 @@ fn handle_internal_command(
                             changed_monitors.insert(mid);
                         }
                     } else {
+                        // If we can't determine the monitor, we don't track it yet.
+                        // It might be on a non-managed workspace or hidden.
                         tracing::warn!(
-                            "Could not determine monitor for window {} (workspace: {:?})",
+                            "Could not determine monitor for window {} (workspace: {:?}). Skipping allocation.",
                             w.window_id,
                             w.workspace
                         );
+                        continue;
                     }
 
                     state.windows.insert(
@@ -710,8 +854,11 @@ fn handle_internal_command(
                 }
             }
         }
-        InternalCommand::HandleSync(Err(e), _, _, _) => {
+        InternalCommand::HandleSync(Err(e), _, _, _, _, _) => {
             tracing::error!("Failed to list windows from AeroSpace: {}", e);
+        }
+        InternalCommand::HandleSync(_, Err(e), _, _, _, _) => {
+            tracing::error!("Failed to list monitors from AeroSpace: {}", e);
         }
     }
 }

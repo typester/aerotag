@@ -63,6 +63,23 @@ pub async fn get_focused_workspace() -> anyhow::Result<Option<AerospaceWorkspace
     Ok(workspaces.into_iter().next())
 }
 
+pub async fn get_visible_workspace(monitor_id: u32) -> anyhow::Result<String> {
+    let output = run_command(&[
+        "list-workspaces",
+        "--monitor",
+        &monitor_id.to_string(),
+        "--visible",
+        "--json",
+    ])
+    .await?;
+    let workspaces: Vec<AerospaceWorkspace> = serde_json::from_str(&output)?;
+    workspaces
+        .into_iter()
+        .next()
+        .map(|w| w.workspace)
+        .ok_or_else(|| anyhow::anyhow!("No visible workspace found for monitor {}", monitor_id))
+}
+
 pub async fn move_node_to_workspace(window_id: u32, workspace: &str) -> anyhow::Result<()> {
     run_command(&[
         "move-node-to-workspace",
