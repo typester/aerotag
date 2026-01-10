@@ -73,7 +73,7 @@ impl State {
         Self {
             windows: HashMap::new(),
             monitors: HashMap::new(),
-            hidden_workspace: "hidden".to_string(), // TODO: Configurable?
+            hidden_workspace: "h".to_string(), // TODO: Configurable?
             focused_monitor_id: None,
         }
     }

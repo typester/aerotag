@@ -114,7 +114,7 @@ async fn run_server() -> anyhow::Result<()> {
         match aerospace::list_monitors().await {
             Ok(monitors) => {
                 for m in monitors {
-                    let visible_ws = format!("v-{}", m.monitor_id);
+                    let visible_ws = m.monitor_id.to_string();
                     let monitor = Monitor::new(m.monitor_id, m.monitor_name.clone(), visible_ws);
                     state.monitors.insert(m.monitor_id, monitor);
                 }
