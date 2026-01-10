@@ -64,18 +64,18 @@ run = ['exec-and-forget aerotag hook']
 
 ```toml
 [mode.main.binding]
-# Switch to Tag (0-9)
-alt-1 = 'exec-and-forget aerotag switch 0'
-alt-2 = 'exec-and-forget aerotag switch 1'
+# Switch to Tag (1-9)
+alt-1 = 'exec-and-forget aerotag switch 1'
+alt-2 = 'exec-and-forget aerotag switch 2'
 # ...
-alt-0 = 'exec-and-forget aerotag switch 9'
+alt-0 = 'exec-and-forget aerotag switch 10'
 
 # Toggle Tag (Multi-tag view)
-ctrl-alt-1 = 'exec-and-forget aerotag toggle 0'
+ctrl-alt-1 = 'exec-and-forget aerotag toggle 1'
 # ...
 
 # Move Window to Tag
-alt-shift-1 = 'exec-and-forget aerotag move 0'
+alt-shift-1 = 'exec-and-forget aerotag move 1'
 # ...
 
 # History (Back-and-forth)
@@ -88,7 +88,7 @@ alt-ctrl-o = 'exec-and-forget aerotag move-monitor next'
 ## Commands
 
 - `server`: Starts the daemon.
-- `switch <tag_index>`: Exclusive switch to a tag (0-31).
+- `switch <tag_index>`: Exclusive switch to a tag (1-32).
 - `toggle <tag_index>`: Toggle a tag's visibility (view multiple tags).
 - `move <tag_index>`: Move the focused window to a tag.
 - `copy <tag_index>`: Copy the focused window to a tag (assign to multiple tags).
