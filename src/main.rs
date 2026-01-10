@@ -26,6 +26,7 @@ enum SubCommand {
     Toggle(ToggleCommand),
     Hook(HookCommand),
     Last(LastCommand),
+    MoveMonitor(MoveMonitorCommand),
 }
 
 #[derive(Debug, FromArgs)]
@@ -67,6 +68,14 @@ struct HookCommand {}
 #[argh(subcommand, name = "last")]
 struct LastCommand {}
 
+#[derive(Debug, FromArgs, Serialize, Deserialize)]
+/// Move focused window to next/prev monitor
+#[argh(subcommand, name = "move-monitor")]
+struct MoveMonitorCommand {
+    #[argh(positional)]
+    target: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 enum IpcCommand {
     Switch(u8),
@@ -74,6 +83,7 @@ enum IpcCommand {
     Move(u8),
     Sync,
     Last,
+    MoveMonitor(String),
 }
 
 enum ManagerMessage {
@@ -99,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
         SubCommand::Move(cmd) => send_client_command(IpcCommand::Move(cmd.tag)).await,
         SubCommand::Hook(_) => send_client_command(IpcCommand::Sync).await,
         SubCommand::Last(_) => send_client_command(IpcCommand::Last).await,
+        SubCommand::MoveMonitor(cmd) => send_client_command(IpcCommand::MoveMonitor(cmd.target)).await,
     }
 }
 
@@ -237,6 +248,53 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand) {
                         &state.hidden_workspace,
                     )
                     .await;
+                }
+            }
+        }
+        IpcCommand::MoveMonitor(target) => {
+            tracing::info!("Moving window to monitor {}", target);
+            if let Ok(Some(w)) = aerospace::get_focused_window().await {
+                if let Ok(Some(current_monitor)) = aerospace::get_focused_monitor().await {
+                    let mut monitor_ids: Vec<u32> = state.monitors.keys().cloned().collect();
+                    monitor_ids.sort(); // Ensure consistent order (e.g., 1, 2)
+
+                    if let Ok(idx) = monitor_ids.binary_search(&current_monitor.monitor_id) {
+                        let next_idx = match target.as_str() {
+                            "next" => (idx + 1) % monitor_ids.len(),
+                            "prev" => (idx + monitor_ids.len() - 1) % monitor_ids.len(),
+                            _ => idx, // No-op if invalid
+                        };
+                        let next_monitor_id = monitor_ids[next_idx];
+
+                        if next_monitor_id != current_monitor.monitor_id {
+                            // 1. Remove from current monitor
+                            if let Some(monitor) = state.get_monitor_mut(current_monitor.monitor_id) {
+                                for t in &mut monitor.tags {
+                                    t.window_ids.retain(|&id| id != w.window_id);
+                                }
+                                // Need to sync current monitor to possibly update its view (though window is leaving)
+                                // But simpler is just to let it go.
+                            }
+
+                            // 2. Add to next monitor's active tag
+                            let mut target_workspace = String::new();
+                            if let Some(monitor) = state.get_monitor_mut(next_monitor_id) {
+                                let target_tag = monitor.selected_tags.trailing_zeros() as u8;
+                                state.assign_window(w.window_id, target_tag, next_monitor_id);
+                                target_workspace = monitor.visible_workspace.clone();
+                            }
+
+                            // 3. Move via AeroSpace
+                            if !target_workspace.is_empty() {
+                                if let Err(e) = aerospace::move_node_to_workspace(w.window_id, &target_workspace).await {
+                                     tracing::error!("Failed to move window to monitor {}: {}", next_monitor_id, e);
+                                }
+                                // Focus follows window automatically with move-node-to-workspace usually,
+                                // but ensure focus is correct
+                                let _ = aerospace::run_command(&["focus", "--window-id", &w.window_id.to_string()]).await;
+                            }
+                        }
+                    }
                 }
             }
         }
