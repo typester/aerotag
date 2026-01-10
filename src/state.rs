@@ -1,0 +1,85 @@
+use std::collections::HashMap;
+
+pub type WindowId = u32;
+pub type MonitorId = u32;
+
+#[derive(Debug, Clone)]
+pub struct WindowInfo {
+    pub id: WindowId,
+    pub app_name: String,
+    pub title: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Tag {
+    pub window_ids: Vec<WindowId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Monitor {
+    pub id: MonitorId,
+    pub name: String,
+    pub selected_tags: u32,
+    pub previous_tags: u32,
+    pub tags: Vec<Tag>,
+    pub visible_workspace: String,
+}
+
+impl Monitor {
+    pub fn new(id: MonitorId, name: String, visible_workspace: String) -> Self {
+        Self {
+            id,
+            name,
+            selected_tags: 1,
+            previous_tags: 1,
+            tags: vec![Tag::default(); 32],
+            visible_workspace,
+        }
+    }
+
+    pub fn select_tag(&mut self, tag_idx: u8) {
+        if tag_idx >= 32 {
+            return;
+        }
+        self.previous_tags = self.selected_tags;
+        self.selected_tags = 1 << tag_idx;
+    }
+
+    pub fn toggle_tag(&mut self, tag_idx: u8) {
+        if tag_idx >= 32 {
+            return;
+        }
+        self.selected_tags ^= 1 << tag_idx;
+    }
+}
+
+#[derive(Debug)]
+pub struct State {
+    pub windows: HashMap<WindowId, WindowInfo>,
+    pub monitors: HashMap<MonitorId, Monitor>,
+    pub hidden_workspace: String,
+    pub focused_monitor_id: Option<MonitorId>,
+}
+
+impl State {
+    pub fn new() -> Self {
+        Self {
+            windows: HashMap::new(),
+            monitors: HashMap::new(),
+            hidden_workspace: "hidden".to_string(), // TODO: Configurable?
+            focused_monitor_id: None,
+        }
+    }
+
+    pub fn get_monitor_mut(&mut self, id: MonitorId) -> Option<&mut Monitor> {
+        self.monitors.get_mut(&id)
+    }
+
+    pub fn assign_window(&mut self, window_id: WindowId, tag_idx: u8, monitor_id: MonitorId) {
+        if let Some(monitor) = self.monitors.get_mut(&monitor_id) {
+            if (tag_idx as usize) < monitor.tags.len() {
+                monitor.tags[tag_idx as usize].window_ids.push(window_id);
+            }
+        }
+    }
+}
