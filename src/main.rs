@@ -180,6 +180,22 @@ async fn run_server() -> anyhow::Result<()> {
     let event_tx_clone = event_tx.clone();
     let actor_tx = tx.clone(); // Clone for internal messages
     tokio::spawn(async move {
+        // Force-reset monitor workspaces on startup to ensure clean state
+        // Monitor N -> Workspace N
+        if let Ok(monitors) = aerospace::list_monitors().await {
+            for m in &monitors {
+                let ws_name = m.monitor_id.to_string();
+                tracing::info!(
+                    "Initializing: Monitor {} -> Workspace {}",
+                    m.monitor_id,
+                    ws_name
+                );
+                let _ = aerospace::focus_monitor(m.monitor_id).await;
+                let _ = aerospace::focus_workspace(&ws_name).await;
+                let _ = aerospace::move_workspace_to_monitor(&ws_name, m.monitor_id).await;
+            }
+        }
+
         let mut state = State::new();
         tracing::info!("State manager started");
 
@@ -611,30 +627,44 @@ fn handle_internal_command(
                     .cloned()
                     .unwrap_or_else(|| m.monitor_id.to_string());
 
-                state
-                    .monitors
-                    .entry(m.monitor_id)
-                    .and_modify(|monitor| {
-                        if monitor.visible_workspace != visible_ws {
-                            tracing::info!(
-                                "Monitor {} visible workspace changed: {} -> {}",
-                                m.monitor_id,
-                                monitor.visible_workspace,
-                                visible_ws
-                            );
-                            monitor.visible_workspace = visible_ws.clone();
-                        }
-                    })
-                    .or_insert_with(|| {
+                if let Some(monitor) = state.monitors.get_mut(&m.monitor_id) {
+                    if monitor.visible_workspace != visible_ws && !visible_ws.starts_with("h-") {
                         tracing::info!(
-                            "New monitor detected: {} (ws: {})",
+                            "Monitor {} visible workspace changed: {} -> {}",
                             m.monitor_id,
+                            monitor.visible_workspace,
                             visible_ws
                         );
-                        Monitor::new(m.monitor_id, m.monitor_name.clone(), visible_ws)
-                    });
-            }
+                        monitor.visible_workspace = visible_ws.clone();
+                    }
+                } else {
+                    // New monitor detected
+                    let initial_ws = if visible_ws.starts_with("h-") {
+                        m.monitor_id.to_string()
+                    } else {
+                        visible_ws
+                    };
+                    tracing::info!(
+                        "New monitor detected: {} (ws: {})",
+                        m.monitor_id,
+                        initial_ws
+                    );
+                    state.monitors.insert(
+                        m.monitor_id,
+                        Monitor::new(m.monitor_id, m.monitor_name.clone(), initial_ws.clone()),
+                    );
 
+                    // Initialize the new monitor asynchronously
+                    let monitor_id = m.monitor_id;
+                    let ws_name = monitor_id.to_string();
+                    tokio::spawn(async move {
+                        tracing::info!("Initializing new monitor: {}", monitor_id);
+                        let _ = aerospace::focus_monitor(monitor_id).await;
+                        let _ = aerospace::focus_workspace(&ws_name).await;
+                        let _ = aerospace::move_workspace_to_monitor(&ws_name, monitor_id).await;
+                    });
+                }
+            }
             let removed_monitor_ids: Vec<u32> = state
                 .monitors
                 .keys()
@@ -728,7 +758,11 @@ fn handle_internal_command(
             }
 
             // 2. Add new windows
-            let focused_monitor_id = fw_monitor.ok().flatten().map(|m| m.monitor_id);
+            let focused_monitor_id = fw_monitor
+                .as_ref()
+                .ok()
+                .and_then(|m| m.as_ref())
+                .map(|m| m.monitor_id);
 
             for w in windows {
                 if !state.windows.contains_key(&w.window_id) {
@@ -843,6 +877,28 @@ fn handle_internal_command(
                                     )
                                     .await;
                                 });
+                            }
+
+                            // If the focus was on a WRONG monitor (e.g. clicked Dock on Monitor B for window on Monitor A),
+                            // Monitor B is now stuck on "h-xxx". We must restore it to its visible workspace.
+                            if let Ok(Some(current_monitor)) = &fw_monitor {
+                                if current_monitor.monitor_id != mid {
+                                    if let Some(wrong_monitor) =
+                                        state.monitors.get(&current_monitor.monitor_id)
+                                    {
+                                        let restore_ws = wrong_monitor.visible_workspace.clone();
+                                        tracing::info!(
+                                            "Restoring monitor {} from hidden workspace to {}",
+                                            current_monitor.monitor_id,
+                                            restore_ws
+                                        );
+                                        tokio::spawn(async move {
+                                            // Wait a bit to let the primary sync happen first?
+                                            // Or just fire it. AeroSpace queues commands usually.
+                                            let _ = aerospace::focus_workspace(&restore_ws).await;
+                                        });
+                                    }
+                                }
                             }
                         } else {
                             tracing::warn!(

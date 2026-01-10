@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use tokio::process::Command;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct AerospaceMonitor {
     pub monitor_id: u32,
@@ -98,6 +98,22 @@ pub async fn focus_workspace(workspace: &str) -> anyhow::Result<()> {
 
 pub async fn focus_window(window_id: u32) -> anyhow::Result<()> {
     run_command(&["focus", "--window-id", &window_id.to_string()]).await?;
+    Ok(())
+}
+
+pub async fn focus_monitor(monitor_id: u32) -> anyhow::Result<()> {
+    run_command(&["focus-monitor", &monitor_id.to_string()]).await?;
+    Ok(())
+}
+
+pub async fn move_workspace_to_monitor(workspace: &str, monitor_id: u32) -> anyhow::Result<()> {
+    run_command(&[
+        "move-workspace-to-monitor",
+        "--workspace",
+        workspace,
+        &monitor_id.to_string(),
+    ])
+    .await?;
     Ok(())
 }
 
