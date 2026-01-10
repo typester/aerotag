@@ -55,10 +55,13 @@ pub async fn get_focused_window() -> anyhow::Result<Option<AerospaceWindow>> {
 }
 
 pub async fn move_node_to_workspace(window_id: u32, workspace: &str) -> anyhow::Result<()> {
-    // Current AeroSpace CLI limitation: might need to focus window first to move it.
-    // Try to focus then move.
-    run_command(&["focus", "--window-id", &window_id.to_string()]).await?;
-    run_command(&["move-node-to-workspace", workspace]).await?;
+    run_command(&[
+        "move-node-to-workspace",
+        "--window-id",
+        &window_id.to_string(),
+        workspace,
+    ])
+    .await?;
     Ok(())
 }
 

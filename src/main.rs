@@ -251,6 +251,28 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand) {
             tracing::info!("Syncing windows");
             if let Ok(windows) = aerospace::list_windows().await {
                 tracing::debug!("AeroSpace reported {} windows", windows.len());
+
+                // 1. Identify and remove closed windows
+                let current_ids: std::collections::HashSet<u32> =
+                    windows.iter().map(|w| w.window_id).collect();
+                let stale_ids: Vec<u32> = state
+                    .windows
+                    .keys()
+                    .filter(|id| !current_ids.contains(id))
+                    .cloned()
+                    .collect();
+
+                for id in stale_ids {
+                    tracing::info!("Removing stale window: {}", id);
+                    state.windows.remove(&id);
+                    for m in state.monitors.values_mut() {
+                        for t in &mut m.tags {
+                            t.window_ids.retain(|&wid| wid != id);
+                        }
+                    }
+                }
+
+                // 2. Add new windows
                 for w in windows {
                     if !state.windows.contains_key(&w.window_id) {
                         tracing::info!(
@@ -323,18 +345,26 @@ async fn sync_monitor_state(
         visible_workspace,
         selected_tags
     );
-    for (i, tag) in tags.iter().enumerate() {
-        let is_visible = (selected_tags & (1 << i)) != 0;
-        let target_workspace = if is_visible {
-            visible_workspace
-        } else {
-            hidden_workspace
-        };
 
-        for &window_id in &tag.window_ids {
-            tracing::debug!("Moving window {} to workspace {}", window_id, target_workspace);
-            if let Err(e) = aerospace::move_node_to_workspace(window_id, target_workspace).await {
-                tracing::error!("Failed to move window {}: {}", window_id, e);
+    // 1. Move windows to HIDDEN first
+    for (i, tag) in tags.iter().enumerate() {
+        if (selected_tags & (1 << i)) == 0 {
+            for &window_id in &tag.window_ids {
+                if let Err(e) = aerospace::move_node_to_workspace(window_id, hidden_workspace).await {
+                    tracing::error!("Failed to hide window {}: {}", window_id, e);
+                }
+            }
+        }
+    }
+
+    // 2. Move windows to VISIBLE next
+    for (i, tag) in tags.iter().enumerate() {
+        if (selected_tags & (1 << i)) != 0 {
+            for &window_id in &tag.window_ids {
+                if let Err(e) = aerospace::move_node_to_workspace(window_id, visible_workspace).await
+                {
+                    tracing::error!("Failed to show window {}: {}", window_id, e);
+                }
             }
         }
     }
