@@ -91,6 +91,8 @@ alt-ctrl-o = 'exec-and-forget aerotag move-monitor next'
 - `switch <tag_index>`: Exclusive switch to a tag (0-31).
 - `toggle <tag_index>`: Toggle a tag's visibility (view multiple tags).
 - `move <tag_index>`: Move the focused window to a tag.
+- `copy <tag_index>`: Copy the focused window to a tag (assign to multiple tags).
+- `set <bitmask>`: Directly set the focused window's tags using a bitmask (e.g., `5` for tags 0 and 2).
 - `last`: Restore the previous tag selection (history).
 - `move-monitor <next|prev>`: Move the focused window to the next/previous monitor's currently active tag.
 - `subscribe`: Stream state change events as JSON.
