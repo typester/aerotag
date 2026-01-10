@@ -28,7 +28,7 @@ AeroSpace is a fantastic tiling window manager for macOS, but it uses a traditio
 ## Installation
 
 ```bash
-cargo install --path .
+cargo install aerotag
 ```
 
 ## Configuration

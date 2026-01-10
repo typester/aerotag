@@ -2,6 +2,12 @@
 name = "aerotag"
 version = "0.1.0"
 edition = "2024"
+description = "Tag-based workspace manager for AeroSpace window manager"
+license = "MIT"
+repository = "https://github.com/typester/aerotag"
+readme = "README.md"
+keywords = ["macos", "aerospace", "tagging", "window-manager"]
+categories = ["command-line-utilities", "os::macos-apis"]
 
 [dependencies]
 anyhow = "1.0.100"
