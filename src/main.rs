@@ -184,15 +184,7 @@ async fn run_server() -> anyhow::Result<()> {
         // Monitor N -> Workspace N
         if let Ok(monitors) = aerospace::list_monitors().await {
             for m in &monitors {
-                let ws_name = m.monitor_id.to_string();
-                tracing::info!(
-                    "Initializing: Monitor {} -> Workspace {}",
-                    m.monitor_id,
-                    ws_name
-                );
-                let _ = aerospace::focus_monitor(m.monitor_id).await;
-                let _ = aerospace::focus_workspace(&ws_name).await;
-                let _ = aerospace::move_workspace_to_monitor(&ws_name, m.monitor_id).await;
+                initialize_monitor(m.monitor_id).await;
             }
         }
 
@@ -656,12 +648,8 @@ fn handle_internal_command(
 
                     // Initialize the new monitor asynchronously
                     let monitor_id = m.monitor_id;
-                    let ws_name = monitor_id.to_string();
                     tokio::spawn(async move {
-                        tracing::info!("Initializing new monitor: {}", monitor_id);
-                        let _ = aerospace::focus_monitor(monitor_id).await;
-                        let _ = aerospace::focus_workspace(&ws_name).await;
-                        let _ = aerospace::move_workspace_to_monitor(&ws_name, monitor_id).await;
+                        initialize_monitor(monitor_id).await;
                     });
                 }
             }
@@ -964,6 +952,18 @@ async fn sync_monitor_state(
     if let Err(e) = aerospace::focus_workspace(visible_workspace).await {
         tracing::error!("Failed to restore focus to {}: {}", visible_workspace, e);
     }
+}
+
+async fn initialize_monitor(monitor_id: u32) {
+    let ws_name = monitor_id.to_string();
+    tracing::info!(
+        "Initializing: Monitor {} -> Workspace {}",
+        monitor_id,
+        ws_name
+    );
+    let _ = aerospace::focus_monitor(monitor_id).await;
+    let _ = aerospace::focus_workspace(&ws_name).await;
+    let _ = aerospace::move_workspace_to_monitor(&ws_name, monitor_id).await;
 }
 
 async fn send_client_command(cmd: IpcCommand) -> anyhow::Result<()> {
