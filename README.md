@@ -34,7 +34,16 @@ cargo install --path .
 ## Configuration
 
 Add the following to your `aerospace.toml`.
+
+### Environment Setup
 Ensure `aerotag` is in your `$PATH`.
+
+```toml
+[exec.env-vars]
+PATH = '${HOME}/.cargo/bin:${PATH}'
+```
+
+### Hooks & Startup
 
 ```toml
 # Start the server on login
@@ -42,10 +51,17 @@ after-startup-command = [
   'exec-and-forget aerotag server'
 ]
 
-# Sync state when focus changes (e.g. clicking dock icons)
+# Sync state when workspace changes (e.g. clicking dock icons, monitor changes)
 exec-on-workspace-change = ['/bin/bash', '-c', 'aerotag hook']
 
-# Keybindings
+# Sync state when new windows are detected
+[[on-window-detected]]
+run = ['exec-and-forget aerotag hook']
+```
+
+### Keybindings
+
+```toml
 [mode.main.binding]
 # Switch to Tag (0-9)
 alt-1 = 'exec-and-forget aerotag switch 0'
