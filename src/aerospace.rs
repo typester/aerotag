@@ -21,7 +21,8 @@ pub struct AerospaceWindow {
 #[serde(rename_all = "kebab-case")]
 pub struct AerospaceWorkspace {
     pub workspace: String,
-    pub monitor: String,
+    #[serde(default)]
+    pub monitor: Option<String>,
 }
 
 pub async fn list_monitors() -> anyhow::Result<Vec<AerospaceMonitor>> {
@@ -52,6 +53,12 @@ pub async fn get_focused_window() -> anyhow::Result<Option<AerospaceWindow>> {
     let output = run_command(&["list-windows", "--focused", "--json"]).await?;
     let windows: Vec<AerospaceWindow> = serde_json::from_str(&output)?;
     Ok(windows.into_iter().next())
+}
+
+pub async fn get_focused_workspace() -> anyhow::Result<Option<AerospaceWorkspace>> {
+    let output = run_command(&["list-workspaces", "--focused", "--json"]).await?;
+    let workspaces: Vec<AerospaceWorkspace> = serde_json::from_str(&output)?;
+    Ok(workspaces.into_iter().next())
 }
 
 pub async fn move_node_to_workspace(window_id: u32, workspace: &str) -> anyhow::Result<()> {

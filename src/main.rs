@@ -364,6 +364,66 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand) {
             } else {
                 tracing::error!("Failed to list windows from AeroSpace");
             }
+
+            // 3. Rescue focus from hidden workspace
+            if let Ok(Some(ws)) = aerospace::get_focused_workspace().await {
+                if ws.workspace == state.hidden_workspace {
+                    tracing::info!("Detected focus on hidden workspace '{}'.", ws.workspace);
+
+                    if let Ok(Some(fw)) = aerospace::get_focused_window().await {
+                        let mut target_monitor_id = None;
+                        let mut target_tag_idx = None;
+
+                        'search: for monitor in state.monitors.values() {
+                            for (i, tag) in monitor.tags.iter().enumerate() {
+                                if tag.window_ids.contains(&fw.window_id) {
+                                    target_monitor_id = Some(monitor.id);
+                                    target_tag_idx = Some(i as u8);
+                                    break 'search;
+                                }
+                            }
+                        }
+
+                        if let (Some(mid), Some(tag)) = (target_monitor_id, target_tag_idx) {
+                            tracing::info!(
+                                "Window {} belongs to Monitor {} Tag {}. Switching...",
+                                fw.window_id,
+                                mid,
+                                tag
+                            );
+
+                            let monitor_sync_data;
+                            if let Some(monitor) = state.get_monitor_mut(mid) {
+                                monitor.select_tag(tag);
+                                monitor_sync_data = Some((
+                                    monitor.tags.clone(),
+                                    monitor.selected_tags,
+                                    monitor.visible_workspace.clone(),
+                                ));
+                            } else {
+                                monitor_sync_data = None;
+                            }
+
+                            if let Some((tags, selected_tags, visible_workspace)) =
+                                monitor_sync_data
+                            {
+                                sync_monitor_state(
+                                    &tags,
+                                    selected_tags,
+                                    &visible_workspace,
+                                    &state.hidden_workspace,
+                                )
+                                .await;
+                            }
+                        } else {
+                            tracing::warn!(
+                                "Focused window {} on hidden workspace not found in state tags.",
+                                fw.window_id
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
