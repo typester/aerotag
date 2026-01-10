@@ -49,7 +49,14 @@ impl Monitor {
         if tag_idx >= 32 {
             return;
         }
+        self.previous_tags = self.selected_tags;
         self.selected_tags ^= 1 << tag_idx;
+    }
+
+    pub fn restore_last_tags(&mut self) {
+        let temp = self.selected_tags;
+        self.selected_tags = self.previous_tags;
+        self.previous_tags = temp;
     }
 }
 

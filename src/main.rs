@@ -25,6 +25,7 @@ enum SubCommand {
     Move(MoveCommand),
     Toggle(ToggleCommand),
     Hook(HookCommand),
+    Last(LastCommand),
 }
 
 #[derive(Debug, FromArgs)]
@@ -61,12 +62,18 @@ struct MoveCommand {
 #[argh(subcommand, name = "hook")]
 struct HookCommand {}
 
+#[derive(Debug, FromArgs, Serialize, Deserialize)]
+/// Restore the last selected tags on the focused monitor
+#[argh(subcommand, name = "last")]
+struct LastCommand {}
+
 #[derive(Debug, Serialize, Deserialize)]
 enum IpcCommand {
     Switch(u8),
     Toggle(u8),
     Move(u8),
     Sync,
+    Last,
 }
 
 enum ManagerMessage {
@@ -91,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
         SubCommand::Toggle(cmd) => send_client_command(IpcCommand::Toggle(cmd.tag)).await,
         SubCommand::Move(cmd) => send_client_command(IpcCommand::Move(cmd.tag)).await,
         SubCommand::Hook(_) => send_client_command(IpcCommand::Sync).await,
+        SubCommand::Last(_) => send_client_command(IpcCommand::Last).await,
     }
 }
 
@@ -186,6 +194,32 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand) {
                 let monitor_sync_data;
                 if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
                     monitor.toggle_tag(tag);
+                    monitor_sync_data = Some((
+                        monitor.tags.clone(),
+                        monitor.selected_tags,
+                        monitor.visible_workspace.clone(),
+                    ));
+                } else {
+                    monitor_sync_data = None;
+                }
+
+                if let Some((tags, selected_tags, visible_workspace)) = monitor_sync_data {
+                    sync_monitor_state(
+                        &tags,
+                        selected_tags,
+                        &visible_workspace,
+                        &state.hidden_workspace,
+                    )
+                    .await;
+                }
+            }
+        }
+        IpcCommand::Last => {
+            tracing::info!("Restoring last tags");
+            if let Ok(Some(m)) = aerospace::get_focused_monitor().await {
+                let monitor_sync_data;
+                if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
+                    monitor.restore_last_tags();
                     monitor_sync_data = Some((
                         monitor.tags.clone(),
                         monitor.selected_tags,
