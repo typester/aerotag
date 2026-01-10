@@ -77,6 +77,11 @@ pub async fn focus_workspace(workspace: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn focus_window(window_id: u32) -> anyhow::Result<()> {
+    run_command(&["focus", "--window-id", &window_id.to_string()]).await?;
+    Ok(())
+}
+
 async fn run_command(args: &[&str]) -> anyhow::Result<String> {
     tracing::debug!("Running command: aerospace {}", args.join(" "));
 
