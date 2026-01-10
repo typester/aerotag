@@ -367,7 +367,7 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand) {
 
             // 3. Rescue focus from hidden workspace
             if let Ok(Some(ws)) = aerospace::get_focused_workspace().await {
-                if ws.workspace == state.hidden_workspace {
+                if ws.workspace.starts_with("h-") {
                     tracing::info!("Detected focus on hidden workspace '{}'.", ws.workspace);
 
                     if let Ok(Some(fw)) = aerospace::get_focused_window().await {
@@ -432,7 +432,7 @@ async fn sync_monitor_state(
     tags: &[state::Tag],
     selected_tags: u32,
     visible_workspace: &str,
-    hidden_workspace: &str,
+    _hidden_workspace: &str,
 ) {
     tracing::debug!(
         "Syncing monitor state. Visible: {}, SelectedTags: {:b}",
@@ -444,7 +444,8 @@ async fn sync_monitor_state(
     for (i, tag) in tags.iter().enumerate() {
         if (selected_tags & (1 << i)) == 0 {
             for &window_id in &tag.window_ids {
-                if let Err(e) = aerospace::move_node_to_workspace(window_id, hidden_workspace).await {
+                let hidden_ws = format!("h-{}", window_id);
+                if let Err(e) = aerospace::move_node_to_workspace(window_id, &hidden_ws).await {
                     tracing::error!("Failed to hide window {}: {}", window_id, e);
                 }
             }
