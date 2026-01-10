@@ -36,11 +36,12 @@ cargo install aerotag
 Add the following to your `aerospace.toml`.
 
 ### Environment Setup
-Ensure `aerotag` is in your `$PATH`.
+Ensure both `aerotag` and `aerospace` commands are in your `$PATH`. This is required for `aerotag` to communicate with AeroSpace when started automatically.
 
 ```toml
 [exec.env-vars]
-PATH = '${HOME}/.cargo/bin:${PATH}'
+# Ensure aerotag (in .cargo/bin) and aerospace (in /opt/homebrew/bin) are in PATH
+PATH = '/opt/homebrew/bin:${HOME}/.cargo/bin:${PATH}'
 ```
 
 ### Hooks & Startup
