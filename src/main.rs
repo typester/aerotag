@@ -161,11 +161,31 @@ async fn main() -> anyhow::Result<()> {
 
     match args.cmd {
         SubCommand::Server(_) => run_server().await,
-        SubCommand::Switch(cmd) => send_client_command(IpcCommand::Switch(cmd.tag)).await,
-        SubCommand::Toggle(cmd) => send_client_command(IpcCommand::Toggle(cmd.tag)).await,
-        SubCommand::Move(cmd) => send_client_command(IpcCommand::Move(cmd.tag)).await,
+        SubCommand::Switch(cmd) => {
+            if cmd.tag == 0 {
+                anyhow::bail!("Tag index must be 1-based");
+            }
+            send_client_command(IpcCommand::Switch(cmd.tag - 1)).await
+        }
+        SubCommand::Toggle(cmd) => {
+            if cmd.tag == 0 {
+                anyhow::bail!("Tag index must be 1-based");
+            }
+            send_client_command(IpcCommand::Toggle(cmd.tag - 1)).await
+        }
+        SubCommand::Move(cmd) => {
+            if cmd.tag == 0 {
+                anyhow::bail!("Tag index must be 1-based");
+            }
+            send_client_command(IpcCommand::Move(cmd.tag - 1)).await
+        }
         SubCommand::Set(cmd) => send_client_command(IpcCommand::Set(cmd.mask)).await,
-        SubCommand::Copy(cmd) => send_client_command(IpcCommand::Copy(cmd.tag)).await,
+        SubCommand::Copy(cmd) => {
+            if cmd.tag == 0 {
+                anyhow::bail!("Tag index must be 1-based");
+            }
+            send_client_command(IpcCommand::Copy(cmd.tag - 1)).await
+        }
         SubCommand::Hook(_) => send_client_command(IpcCommand::Sync).await,
         SubCommand::Last(_) => send_client_command(IpcCommand::Last).await,
         SubCommand::MoveMonitor(cmd) => {
