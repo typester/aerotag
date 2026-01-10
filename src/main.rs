@@ -29,6 +29,8 @@ enum SubCommand {
     Last(LastCommand),
     MoveMonitor(MoveMonitorCommand),
     Subscribe(SubscribeCommand),
+    Set(SetCommand),
+    Copy(CopyCommand),
 }
 
 #[derive(Debug, FromArgs)]
@@ -61,6 +63,22 @@ struct MoveCommand {
 }
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
+/// Set focused window tags to a specific bitmask
+#[argh(subcommand, name = "set")]
+struct SetCommand {
+    #[argh(positional)]
+    mask: u32,
+}
+
+#[derive(Debug, FromArgs, Serialize, Deserialize)]
+/// Copy focused window to a specific tag
+#[argh(subcommand, name = "copy")]
+struct CopyCommand {
+    #[argh(positional)]
+    tag: u8,
+}
+
+#[derive(Debug, FromArgs, Serialize, Deserialize)]
 /// Trigger synchronization (e.g., from AeroSpace exec-on-workspace-change)
 #[argh(subcommand, name = "hook")]
 struct HookCommand {}
@@ -88,6 +106,8 @@ enum IpcCommand {
     Switch(u8),
     Toggle(u8),
     Move(u8),
+    Set(u32),
+    Copy(u8),
     Sync,
     Last,
     MoveMonitor(String),
@@ -108,6 +128,8 @@ enum InternalCommand {
     HandleToggle(Option<AerospaceMonitor>, u8),
     HandleLast(Option<AerospaceMonitor>),
     HandleMove(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
+    HandleSet(Option<AerospaceWindow>, Option<AerospaceMonitor>, u32),
+    HandleCopy(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
     HandleMoveMonitor(Option<AerospaceWindow>, Option<AerospaceMonitor>, String),
     HandleSync(
         anyhow::Result<Vec<AerospaceWindow>>,
@@ -142,6 +164,8 @@ async fn main() -> anyhow::Result<()> {
         SubCommand::Switch(cmd) => send_client_command(IpcCommand::Switch(cmd.tag)).await,
         SubCommand::Toggle(cmd) => send_client_command(IpcCommand::Toggle(cmd.tag)).await,
         SubCommand::Move(cmd) => send_client_command(IpcCommand::Move(cmd.tag)).await,
+        SubCommand::Set(cmd) => send_client_command(IpcCommand::Set(cmd.mask)).await,
+        SubCommand::Copy(cmd) => send_client_command(IpcCommand::Copy(cmd.tag)).await,
         SubCommand::Hook(_) => send_client_command(IpcCommand::Sync).await,
         SubCommand::Last(_) => send_client_command(IpcCommand::Last).await,
         SubCommand::MoveMonitor(cmd) => {
@@ -361,6 +385,24 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
                     )))
                     .await;
             }
+            IpcCommand::Set(mask) => {
+                let w = aerospace::get_focused_window().await.ok().flatten();
+                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let _ = tx
+                    .send(ManagerMessage::Internal(InternalCommand::HandleSet(
+                        w, m, mask,
+                    )))
+                    .await;
+            }
+            IpcCommand::Copy(tag) => {
+                let w = aerospace::get_focused_window().await.ok().flatten();
+                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let _ = tx
+                    .send(ManagerMessage::Internal(InternalCommand::HandleCopy(
+                        w, m, tag,
+                    )))
+                    .await;
+            }
             IpcCommand::MoveMonitor(target) => {
                 let w = aerospace::get_focused_window().await.ok().flatten();
                 let m = aerospace::get_focused_monitor().await.ok().flatten();
@@ -536,6 +578,121 @@ fn handle_internal_command(
             }
         }
         InternalCommand::HandleMove(None, _, _) => tracing::warn!("No focused window found"),
+
+        InternalCommand::HandleSet(Some(w), focused_monitor, mask) => {
+            tracing::info!("Setting window tags to mask {:b}", mask);
+            let mut target_monitor_id = None;
+
+            if let Some(mid) = state.find_monitor_by_window(w.window_id) {
+                target_monitor_id = Some(mid);
+            } else if let Some(m) = focused_monitor {
+                target_monitor_id = Some(m.monitor_id);
+            }
+
+            if let Some(mid) = target_monitor_id {
+                let mut sync_data = None;
+                if let Some(monitor) = state.get_monitor_mut(mid) {
+                    // Remove from all tags
+                    for t in &mut monitor.tags {
+                        t.window_ids.retain(|&id| id != w.window_id);
+                    }
+                    // Add to tags specified by mask
+                    for i in 0..32 {
+                        if (mask & (1 << i)) != 0 {
+                            if (i as usize) < monitor.tags.len() {
+                                monitor.tags[i as usize].window_ids.push(w.window_id);
+                            }
+                        }
+                    }
+                    sync_data = Some((
+                        monitor.tags.clone(),
+                        monitor.selected_tags,
+                        monitor.visible_workspace.clone(),
+                    ));
+                }
+
+                if let Some((tags, selected_tags, visible_workspace)) = sync_data {
+                    broadcast_state_change(state, mid, event_tx);
+                    let hidden_workspace = state.hidden_workspace.clone();
+
+                    state
+                        .windows
+                        .entry(w.window_id)
+                        .or_insert(state::WindowInfo {
+                            id: w.window_id,
+                            app_name: w.app_name,
+                            title: w.window_title,
+                        });
+
+                    tokio::spawn(async move {
+                        sync_monitor_state(
+                            &tags,
+                            selected_tags,
+                            &visible_workspace,
+                            &hidden_workspace,
+                        )
+                        .await;
+                    });
+                }
+            } else {
+                tracing::warn!("No monitor found for window set");
+            }
+        }
+        InternalCommand::HandleSet(None, _, _) => tracing::warn!("No focused window found"),
+
+        InternalCommand::HandleCopy(Some(w), focused_monitor, tag) => {
+            tracing::info!("Adding window to tag {}", tag);
+            let mut target_monitor_id = None;
+
+            if let Some(mid) = state.find_monitor_by_window(w.window_id) {
+                target_monitor_id = Some(mid);
+            } else if let Some(m) = focused_monitor {
+                target_monitor_id = Some(m.monitor_id);
+            }
+
+            if let Some(mid) = target_monitor_id {
+                let mut sync_data = None;
+                if let Some(monitor) = state.get_monitor_mut(mid) {
+                    if (tag as usize) < monitor.tags.len() {
+                        if !monitor.tags[tag as usize].window_ids.contains(&w.window_id) {
+                            monitor.tags[tag as usize].window_ids.push(w.window_id);
+                        }
+                    }
+                    sync_data = Some((
+                        monitor.tags.clone(),
+                        monitor.selected_tags,
+                        monitor.visible_workspace.clone(),
+                    ));
+                }
+
+                if let Some((tags, selected_tags, visible_workspace)) = sync_data {
+                    broadcast_state_change(state, mid, event_tx);
+                    let hidden_workspace = state.hidden_workspace.clone();
+
+                    state
+                        .windows
+                        .entry(w.window_id)
+                        .or_insert(state::WindowInfo {
+                            id: w.window_id,
+                            app_name: w.app_name,
+                            title: w.window_title,
+                        });
+
+                    tokio::spawn(async move {
+                        sync_monitor_state(
+                            &tags,
+                            selected_tags,
+                            &visible_workspace,
+                            &hidden_workspace,
+                        )
+                        .await;
+                    });
+                }
+            } else {
+                tracing::warn!("No monitor found for window copy");
+            }
+        }
+        InternalCommand::HandleCopy(None, _, _) => tracing::warn!("No focused window found"),
 
         InternalCommand::HandleMoveMonitor(Some(w), Some(current_monitor), target) => {
             tracing::info!("Moving window to monitor {}", target);
