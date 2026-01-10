@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 mod aerospace;
 mod state;
 
-use state::{State, Monitor};
+use state::{Monitor, State};
 
 #[derive(Debug, FromArgs)]
 /// Tag based workspace manager for AeroSpace
@@ -125,7 +125,9 @@ async fn main() -> anyhow::Result<()> {
         SubCommand::Move(cmd) => send_client_command(IpcCommand::Move(cmd.tag)).await,
         SubCommand::Hook(_) => send_client_command(IpcCommand::Sync).await,
         SubCommand::Last(_) => send_client_command(IpcCommand::Last).await,
-        SubCommand::MoveMonitor(cmd) => send_client_command(IpcCommand::MoveMonitor(cmd.target)).await,
+        SubCommand::MoveMonitor(cmd) => {
+            send_client_command(IpcCommand::MoveMonitor(cmd.target)).await
+        }
         SubCommand::Subscribe(_) => run_subscriber().await,
     }
 }
@@ -160,7 +162,7 @@ async fn run_server() -> anyhow::Result<()> {
     tokio::spawn(async move {
         let mut state = State::new();
         tracing::info!("State manager started");
-        
+
         // Initial sync
         match aerospace::list_monitors().await {
             Ok(monitors) => {
@@ -172,41 +174,45 @@ async fn run_server() -> anyhow::Result<()> {
             }
             Err(e) => tracing::error!("Failed to list monitors: {}", e),
         }
-        
+
         // Initial window population
         handle_ipc_command(&mut state, IpcCommand::Sync, &event_tx_clone).await;
 
         while let Some(msg) = rx.recv().await {
             match msg {
                 ManagerMessage::Ipc(cmd) => {
-                     handle_ipc_command(&mut state, cmd, &event_tx_clone).await;
-                },
+                    handle_ipc_command(&mut state, cmd, &event_tx_clone).await;
+                }
                 ManagerMessage::SubscribeClient(mut stream_tx) => {
-                     let mut event_rx = event_tx_clone.subscribe();
-                     
-                     // Send initial state for all monitors
-                     for m in state.monitors.values() {
-                         let occupied = calculate_occupied_tags(m);
-                         let event = StateEvent {
-                             event: "state_change".to_string(),
-                             monitor_id: m.id,
-                             selected_tags: m.selected_tags,
-                             occupied_tags: occupied,
-                         };
-                         if let Ok(json) = serde_json::to_string(&event) {
-                             let _ = stream_tx.write_all(format!("{}\n", json).as_bytes()).await;
-                         }
-                     }
+                    let mut event_rx = event_tx_clone.subscribe();
 
-                     tokio::spawn(async move {
-                         while let Ok(event) = event_rx.recv().await {
-                             if let Ok(json) = serde_json::to_string(&event) {
-                                 if stream_tx.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
-                                     break; // Client disconnected
-                                 }
-                             }
-                         }
-                     });
+                    // Send initial state for all monitors
+                    for m in state.monitors.values() {
+                        let occupied = calculate_occupied_tags(m);
+                        let event = StateEvent {
+                            event: "state_change".to_string(),
+                            monitor_id: m.id,
+                            selected_tags: m.selected_tags,
+                            occupied_tags: occupied,
+                        };
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            let _ = stream_tx.write_all(format!("{}\n", json).as_bytes()).await;
+                        }
+                    }
+
+                    tokio::spawn(async move {
+                        while let Ok(event) = event_rx.recv().await {
+                            if let Ok(json) = serde_json::to_string(&event) {
+                                if stream_tx
+                                    .write_all(format!("{}\n", json).as_bytes())
+                                    .await
+                                    .is_err()
+                                {
+                                    break; // Client disconnected
+                                }
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -229,16 +235,17 @@ async fn run_server() -> anyhow::Result<()> {
                     let mut buf = Vec::new();
                     // Read command
                     if let Ok(_) = stream_rx.read_to_end(&mut buf).await {
-                         if let Ok(cmd) = serde_json::from_slice::<IpcCommand>(&buf) {
-                             match cmd {
-                                 IpcCommand::Subscribe => {
-                                     let _ = tx.send(ManagerMessage::SubscribeClient(stream_tx)).await;
-                                 }
-                                 _ => {
-                                     let _ = tx.send(ManagerMessage::Ipc(cmd)).await;
-                                 }
-                             }
-                         }
+                        if let Ok(cmd) = serde_json::from_slice::<IpcCommand>(&buf) {
+                            match cmd {
+                                IpcCommand::Subscribe => {
+                                    let _ =
+                                        tx.send(ManagerMessage::SubscribeClient(stream_tx)).await;
+                                }
+                                _ => {
+                                    let _ = tx.send(ManagerMessage::Ipc(cmd)).await;
+                                }
+                            }
+                        }
                     }
                 });
             }
@@ -257,7 +264,11 @@ fn calculate_occupied_tags(monitor: &Monitor) -> u32 {
     occupied
 }
 
-fn broadcast_state_change(state: &State, monitor_id: u32, event_tx: &tokio::sync::broadcast::Sender<StateEvent>) {
+fn broadcast_state_change(
+    state: &State,
+    monitor_id: u32,
+    event_tx: &tokio::sync::broadcast::Sender<StateEvent>,
+) {
     if let Some(monitor) = state.monitors.get(&monitor_id) {
         let occupied = calculate_occupied_tags(monitor);
         let event = StateEvent {
@@ -270,7 +281,11 @@ fn broadcast_state_change(state: &State, monitor_id: u32, event_tx: &tokio::sync
     }
 }
 
-async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio::sync::broadcast::Sender<StateEvent>) {
+async fn handle_ipc_command(
+    state: &mut State,
+    cmd: IpcCommand,
+    event_tx: &tokio::sync::broadcast::Sender<StateEvent>,
+) {
     tracing::debug!("Handling IPC command: {:?}", cmd);
     match cmd {
         IpcCommand::Switch(tag) => {
@@ -372,7 +387,8 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio
 
                         if next_monitor_id != current_monitor.monitor_id {
                             // 1. Remove from current monitor
-                            if let Some(monitor) = state.get_monitor_mut(current_monitor.monitor_id) {
+                            if let Some(monitor) = state.get_monitor_mut(current_monitor.monitor_id)
+                            {
                                 for t in &mut monitor.tags {
                                     t.window_ids.retain(|&id| id != w.window_id);
                                 }
@@ -382,19 +398,28 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio
                             // 2. Add to next monitor's active tag
                             let mut target_workspace = String::new();
                             let mut target_tag = 0;
-                            
+
                             if let Some(monitor) = state.get_monitor_mut(next_monitor_id) {
                                 target_tag = monitor.selected_tags.trailing_zeros() as u8;
                                 target_workspace = monitor.visible_workspace.clone();
                             }
-                            
+
                             state.assign_window(w.window_id, target_tag, next_monitor_id);
                             broadcast_state_change(state, next_monitor_id, event_tx);
 
                             // 3. Move via AeroSpace
                             if !target_workspace.is_empty() {
-                                if let Err(e) = aerospace::move_node_to_workspace(w.window_id, &target_workspace).await {
-                                     tracing::error!("Failed to move window to monitor {}: {}", next_monitor_id, e);
+                                if let Err(e) = aerospace::move_node_to_workspace(
+                                    w.window_id,
+                                    &target_workspace,
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        "Failed to move window to monitor {}: {}",
+                                        next_monitor_id,
+                                        e
+                                    );
                                 }
                                 let _ = aerospace::focus_window(w.window_id).await;
                             }
@@ -426,11 +451,14 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio
                         monitor_sync_data = None;
                     }
 
-                    state.windows.entry(w.window_id).or_insert(state::WindowInfo {
-                        id: w.window_id,
-                        app_name: w.app_name,
-                        title: w.window_title,
-                    });
+                    state
+                        .windows
+                        .entry(w.window_id)
+                        .or_insert(state::WindowInfo {
+                            id: w.window_id,
+                            app_name: w.app_name,
+                            title: w.window_title,
+                        });
 
                     if let Some((tags, selected_tags, visible_workspace)) = monitor_sync_data {
                         sync_monitor_state(
@@ -452,7 +480,7 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio
                 tracing::debug!("AeroSpace reported {} windows", windows.len());
 
                 // 1. Identify and remove closed windows
-                let current_ids: std::collections::HashSet<u32> = 
+                let current_ids: std::collections::HashSet<u32> =
                     windows.iter().map(|w| w.window_id).collect();
                 let stale_ids: Vec<u32> = state
                     .windows
@@ -472,7 +500,9 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio
                                 removed = true;
                             }
                         }
-                        if removed { changed_monitors.insert(m.id); }
+                        if removed {
+                            changed_monitors.insert(m.id);
+                        }
                     }
                 }
 
@@ -535,7 +565,7 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio
             } else {
                 tracing::error!("Failed to list windows from AeroSpace");
             }
-            
+
             for mid in changed_monitors {
                 broadcast_state_change(state, mid, event_tx);
             }
@@ -580,7 +610,7 @@ async fn handle_ipc_command(state: &mut State, cmd: IpcCommand, event_tx: &tokio
                                 monitor_sync_data = None;
                             }
 
-                            if let Some((tags, selected_tags, visible_workspace)) = 
+                            if let Some((tags, selected_tags, visible_workspace)) =
                                 monitor_sync_data
                             {
                                 sync_monitor_state(
@@ -633,7 +663,8 @@ async fn sync_monitor_state(
     for (i, tag) in tags.iter().enumerate() {
         if (selected_tags & (1 << i)) != 0 {
             for &window_id in &tag.window_ids {
-                if let Err(e) = aerospace::move_node_to_workspace(window_id, visible_workspace).await
+                if let Err(e) =
+                    aerospace::move_node_to_workspace(window_id, visible_workspace).await
                 {
                     tracing::error!("Failed to show window {}: {}", window_id, e);
                 }
@@ -642,7 +673,10 @@ async fn sync_monitor_state(
     }
 
     // Restore focus to the visible workspace to prevent getting stuck in hidden workspace
-    tracing::debug!("Restoring focus to visible workspace: {}", visible_workspace);
+    tracing::debug!(
+        "Restoring focus to visible workspace: {}",
+        visible_workspace
+    );
     if let Err(e) = aerospace::focus_workspace(visible_workspace).await {
         tracing::error!("Failed to restore focus to {}: {}", visible_workspace, e);
     }

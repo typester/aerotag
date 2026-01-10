@@ -19,6 +19,7 @@ pub struct AerospaceWindow {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[allow(dead_code)]
 pub struct AerospaceWorkspace {
     pub workspace: String,
     #[serde(default)]
@@ -37,6 +38,7 @@ pub async fn list_windows() -> anyhow::Result<Vec<AerospaceWindow>> {
     Ok(windows)
 }
 
+#[allow(dead_code)]
 pub async fn list_workspaces() -> anyhow::Result<Vec<AerospaceWorkspace>> {
     let output = run_command(&["list-workspaces", "--all", "--json"]).await?;
     let workspaces: Vec<AerospaceWorkspace> = serde_json::from_str(&output)?;
@@ -85,10 +87,7 @@ pub async fn focus_window(window_id: u32) -> anyhow::Result<()> {
 async fn run_command(args: &[&str]) -> anyhow::Result<String> {
     tracing::debug!("Running command: aerospace {}", args.join(" "));
 
-    let output = Command::new("aerospace")
-        .args(args)
-        .output()
-        .await?;
+    let output = Command::new("aerospace").args(args).output().await?;
 
     if output.status.success() {
         let stdout = String::from_utf8(output.stdout)?;

@@ -4,6 +4,7 @@ pub type WindowId = u32;
 pub type MonitorId = u32;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WindowInfo {
     pub id: WindowId,
     pub app_name: String,
@@ -16,6 +17,7 @@ pub struct Tag {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Monitor {
     pub id: MonitorId,
     pub name: String,
@@ -64,6 +66,7 @@ impl Monitor {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct State {
     pub windows: HashMap<WindowId, WindowInfo>,
     pub monitors: HashMap<MonitorId, Monitor>,
