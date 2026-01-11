@@ -2,7 +2,7 @@
 
 **Tag-based workspace management for [AeroSpace](https://github.com/nikitabobko/AeroSpace).**
 
-`aerotag` brings the power of dynamic tagging (inspired by AwesomeWM, dwm, etc.) to macOS. Instead of rigid workspaces, you assign tags to windows and dynamically view any combination of them.
+`aerotag` brings the power of dynamic tagging (inspired by [AwesomeWM](https://awesomewm.org/), [River](https://awesomewm.org/), etc.) to macOS. Instead of rigid workspaces, you assign tags to windows and dynamically view any combination of them.
 
 ## Overview
 
@@ -18,7 +18,7 @@ AeroSpace is a fantastic tiling window manager for macOS, but it uses a traditio
 `aerotag` operates in two modes:
 
 1.  **Server:** Runs in the background, maintaining the state (which window has which tag) in memory. It communicates with AeroSpace CLI to move windows into a single "Visible Workspace" per monitor or hide them in "Hidden Workspaces".
-2.  **Client:** Sends commands (`switch`, `move`, `toggle`, etc.) to the server via Unix Domain Socket.
+2.  **Client:** Sends commands (`tag-view`, `window-move`, etc.) to the server via Unix Domain Socket.
 
 ### Workspace Mapping
 `aerotag` simplifies AeroSpace's workspace usage:
@@ -64,39 +64,56 @@ run = ['exec-and-forget aerotag hook']
 
 ```toml
 [mode.main.binding]
-# Switch to Tag (1-9)
-alt-1 = 'exec-and-forget aerotag switch 1'
-alt-2 = 'exec-and-forget aerotag switch 2'
+# View Tag (Switch to 1-9)
+alt-1 = 'exec-and-forget aerotag tag-view 1'
+alt-2 = 'exec-and-forget aerotag tag-view 2'
 # ...
-alt-0 = 'exec-and-forget aerotag switch 10'
+alt-0 = 'exec-and-forget aerotag tag-view 10'
 
-# Toggle Tag (Multi-tag view)
-ctrl-alt-1 = 'exec-and-forget aerotag toggle 1'
+# Toggle Tag Visibility (Multi-tag view)
+ctrl-alt-1 = 'exec-and-forget aerotag tag-toggle 1'
 # ...
 
 # Move Window to Tag
-alt-shift-1 = 'exec-and-forget aerotag move 1'
+alt-shift-1 = 'exec-and-forget aerotag window-move 1'
 # ...
 
+# Toggle Window Tag (Assign window to multiple tags)
+alt-shift-ctrl-1 = 'exec-and-forget aerotag window-toggle 1'
+
 # History (Back-and-forth)
-alt-x = 'exec-and-forget aerotag last'
+alt-x = 'exec-and-forget aerotag tag-last'
 
 # Move Window to Next/Prev Monitor (AwesomeWM style: moves to active tag on target monitor)
-alt-ctrl-o = 'exec-and-forget aerotag move-monitor next'
+alt-ctrl-o = 'exec-and-forget aerotag window-move-monitor next'
 ```
 
 ## Commands
 
+### Tag Operations
+- `tag-view <index>`: Exclusive switch to a tag (1-32).
+- `tag-toggle <index>`: Toggle a tag's visibility (view multiple tags).
+- `tag-last`: Restore the previous tag selection (history).
+
+### Window Operations
+- `window-move <index>`: Move the focused window to a tag (remove from others).
+- `window-toggle <index>`: Toggle the focused window's membership in a tag.
+  - *Safety Guard:* Will not remove the tag if it's the window's only tag.
+- `window-move-monitor <next|prev>`: Move the focused window to the next/previous monitor.
+
+### Primitive API (For Advanced Scripting)
+`aerotag` provides low-level commands to query and manipulate state via bitmasks, useful for building custom scripts.
+
+- `query window [window_id]`: Get window state (tags, monitor) as JSON.
+- `query monitor [monitor_id]`: Get monitor state (selected tags, occupied tags) as JSON.
+- `query state`: Get full system state as JSON.
+- `window-set <mask> [--window-id <id>]`: Set window tags directly using a bitmask.
+- `tag-set <mask> [--monitor-id <id>]`: Set monitor visible tags directly using a bitmask.
+
+### System
 - `server`: Starts the daemon.
-- `switch <tag_index>`: Exclusive switch to a tag (1-32).
-- `toggle <tag_index>`: Toggle a tag's visibility (view multiple tags).
-- `move <tag_index>`: Move the focused window to a tag.
-- `copy <tag_index>`: Copy the focused window to a tag (assign to multiple tags).
-- `set <bitmask>`: Directly set the focused window's tags using a bitmask (e.g., `5` for tags 0 and 2).
-- `last`: Restore the previous tag selection (history).
-- `move-monitor <next|prev>`: Move the focused window to the next/previous monitor's currently active tag.
 - `subscribe`: Stream state change events as JSON.
-- `hook`: Trigger state synchronization (used internally by `exec-on-workspace-change`).
+- `hook`: Trigger state synchronization (used internally).
 
 ## External Integrations
 
@@ -112,8 +129,6 @@ Running `aerotag subscribe` will output a JSON stream of state changes:
 
 - `selected_tags`: Bitmask of currently active tags.
 - `occupied_tags`: Bitmask of tags that contain at least one window.
-
-You can use this to build a dynamic tag bar that highlights active and occupied tags in real-time.
 
 ## License
 
