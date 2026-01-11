@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/typester/aerotag/compare/v0.3.1...v0.4.0) - 2026-01-11
+
+### Added
+
+- [**breaking**] revamp command structure (tag-*, window-*) and introduce primitive API ([#13](https://github.com/typester/aerotag/pull/13))
+
 ## [0.3.1](https://github.com/typester/aerotag/compare/v0.3.0...v0.3.1) - 2026-01-11
 
 ### Fixed
