@@ -53,50 +53,8 @@ pub async fn run_server() -> anyhow::Result<()> {
                 ManagerMessage::QueryClient(target, stream_tx) => {
                     handle_query_client_async(target, stream_tx, actor_tx.clone(), client.clone());
                 }
-                ManagerMessage::SubscribeClient(mut stream_tx) => {
-                    let mut event_rx = event_tx_clone.subscribe();
-
-                    // Collect initial state for all monitors synchronously
-                    let mut initial_events = Vec::new();
-                    for m in state.monitors.values() {
-                        let occupied = calculate_occupied_tags(m);
-                        let event = StateEvent {
-                            event: "state_change".to_string(),
-                            monitor_id: m.id,
-                            selected_tags: m.selected_tags,
-                            occupied_tags: occupied,
-                        };
-                        if let Ok(json) = serde_json::to_string(&event) {
-                            initial_events.push(json);
-                        }
-                    }
-
-                    // Perform I/O in a separate task
-                    tokio::spawn(async move {
-                        // Send initial events
-                        for json in initial_events {
-                            if stream_tx
-                                .write_all(format!("{}\n", json).as_bytes())
-                                .await
-                                .is_err()
-                            {
-                                return; // Client disconnected
-                            }
-                        }
-
-                        // Stream future events
-                        while let Ok(event) = event_rx.recv().await {
-                            if let Ok(json) = serde_json::to_string(&event) {
-                                if stream_tx
-                                    .write_all(format!("{}\n", json).as_bytes())
-                                    .await
-                                    .is_err()
-                                {
-                                    break; // Client disconnected
-                                }
-                            }
-                        }
-                    });
+                ManagerMessage::SubscribeClient(stream_tx) => {
+                    handle_subscribe_client(stream_tx, &event_tx_clone, &state);
                 }
             }
         }
@@ -113,34 +71,86 @@ pub async fn run_server() -> anyhow::Result<()> {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    let (mut stream_rx, stream_tx) = stream.into_split();
-                    let mut buf = Vec::new();
-                    // Read command
-                    if let Ok(_) = stream_rx.read_to_end(&mut buf).await {
-                        if let Ok(cmd) = serde_json::from_slice::<IpcCommand>(&buf) {
-                            match cmd {
-                                IpcCommand::Subscribe => {
-                                    let _ =
-                                        tx.send(ManagerMessage::SubscribeClient(stream_tx)).await;
-                                }
-                                IpcCommand::Query(target) => {
-                                    let _ = tx
-                                        .send(ManagerMessage::QueryClient(target, stream_tx))
-                                        .await;
-                                }
-                                _ => {
-                                    let _ = tx.send(ManagerMessage::Ipc(cmd)).await;
-                                }
-                            }
-                        }
-                    }
-                });
+                handle_connection(stream, tx.clone());
             }
             Err(e) => tracing::error!("Accept error: {}", e),
         }
     }
+}
+
+fn handle_subscribe_client(
+    mut stream_tx: tokio::net::unix::OwnedWriteHalf,
+    event_tx: &tokio::sync::broadcast::Sender<StateEvent>,
+    state: &State,
+) {
+    let mut event_rx = event_tx.subscribe();
+
+    // Collect initial state for all monitors synchronously
+    let mut initial_events = Vec::new();
+    for m in state.monitors.values() {
+        let occupied = calculate_occupied_tags(m);
+        let event = StateEvent {
+            event: "state_change".to_string(),
+            monitor_id: m.id,
+            selected_tags: m.selected_tags,
+            occupied_tags: occupied,
+        };
+        if let Ok(json) = serde_json::to_string(&event) {
+            initial_events.push(json);
+        }
+    }
+
+    // Perform I/O in a separate task
+    tokio::spawn(async move {
+        // Send initial events
+        for json in initial_events {
+            if stream_tx
+                .write_all(format!("{}\n", json).as_bytes())
+                .await
+                .is_err()
+            {
+                return; // Client disconnected
+            }
+        }
+
+        // Stream future events
+        while let Ok(event) = event_rx.recv().await {
+            if let Ok(json) = serde_json::to_string(&event) {
+                if stream_tx
+                    .write_all(format!("{}\n", json).as_bytes())
+                    .await
+                    .is_err()
+                {
+                    break; // Client disconnected
+                }
+            }
+        }
+    });
+}
+
+fn handle_connection(stream: tokio::net::UnixStream, tx: mpsc::Sender<ManagerMessage>) {
+    tokio::spawn(async move {
+        let (mut stream_rx, stream_tx) = stream.into_split();
+        let mut buf = Vec::new();
+        // Read command
+        if let Ok(_) = stream_rx.read_to_end(&mut buf).await {
+            if let Ok(cmd) = serde_json::from_slice::<IpcCommand>(&buf) {
+                match cmd {
+                    IpcCommand::Subscribe => {
+                        let _ = tx.send(ManagerMessage::SubscribeClient(stream_tx)).await;
+                    }
+                    IpcCommand::Query(target) => {
+                        let _ = tx
+                            .send(ManagerMessage::QueryClient(target, stream_tx))
+                            .await;
+                    }
+                    _ => {
+                        let _ = tx.send(ManagerMessage::Ipc(cmd)).await;
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn calculate_occupied_tags(monitor: &Monitor) -> u32 {
@@ -1529,5 +1539,162 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&buf).unwrap();
         assert_eq!(json["focused_monitor_id"], 1);
         assert!(json["monitors"]["1"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_window_set() {
+        let mut state = State::new();
+        let mut monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        monitor.tags[0].window_ids.push(100);
+        state.monitors.insert(1, monitor);
+
+        let mock = MockAerospaceClient::new();
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        // Set Window 100 tags to mask 6 (Tag 1 and Tag 2)
+        let cmd = InternalCommand::HandleWindowSet(
+            None,
+            Some(AerospaceMonitor {
+                monitor_id: 1,
+                monitor_name: "Main".into(),
+            }),
+            6,
+            Some(100),
+        );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        let m = state.monitors.get(&1).unwrap();
+        assert!(!m.tags[0].window_ids.contains(&100));
+        assert!(m.tags[1].window_ids.contains(&100));
+        assert!(m.tags[2].window_ids.contains(&100));
+    }
+
+    #[tokio::test]
+    async fn test_tag_set() {
+        let mut state = State::new();
+        let monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        state.monitors.insert(1, monitor);
+
+        let mock = MockAerospaceClient::new();
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        // Set Monitor 1 tags to mask 5 (Tag 0 and Tag 2)
+        let cmd = InternalCommand::HandleTagSet(
+            None,
+            5,
+            Some(1),
+        );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        let m = state.monitors.get(&1).unwrap();
+        assert_eq!(m.selected_tags, 5);
+    }
+
+    #[tokio::test]
+    async fn test_window_move_monitor() {
+        let mut state = State::new();
+        // Monitor 1 (focused) and Monitor 2
+        let mut m1 = Monitor::new(1, "M1".into(), "1".into());
+        let m2 = Monitor::new(2, "M2".into(), "2".into());
+        
+        // Window 100 is in Monitor 1, Tag 0
+        m1.tags[0].window_ids.push(100);
+        state.monitors.insert(1, m1);
+        state.monitors.insert(2, m2);
+
+        let mut mock = MockAerospaceClient::new();
+        // move_monitor calls move_node_to_workspace and focus_window
+        mock.expect_move_node_to_workspace()
+            .with(mockall::predicate::eq(100), mockall::predicate::eq("2"))
+            .returning(|_, _| Ok(()));
+        mock.expect_focus_window()
+            .with(mockall::predicate::eq(100))
+            .returning(|_| Ok(()));
+
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        let cmd = InternalCommand::HandleWindowMoveMonitor(
+            Some(AerospaceWindow {
+                window_id: 100,
+                app_name: "App".into(),
+                window_title: "Title".into(),
+                workspace: None,
+            }),
+            Some(AerospaceMonitor { monitor_id: 1, monitor_name: "M1".into() }),
+            "next".into(),
+        );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        // Window should be removed from M1 and added to M2
+        assert!(!state.monitors.get(&1).unwrap().tags[0].window_ids.contains(&100));
+        assert!(state.monitors.get(&2).unwrap().tags[0].window_ids.contains(&100));
+    }
+
+    #[tokio::test]
+    async fn test_ipc_subscribe() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let (client_conn, server_conn) = UnixStream::pair().unwrap();
+
+        // Start connection handler
+        handle_connection(server_conn, tx);
+
+        // Send Subscribe command from client side
+        let mut client_conn = client_conn;
+        let cmd = IpcCommand::Subscribe;
+        let data = serde_json::to_vec(&cmd).unwrap();
+        client_conn.write_all(&data).await.unwrap();
+        client_conn.shutdown().await.unwrap();
+
+        // Check if actor receives SubscribeClient message
+        let msg = rx.recv().await.unwrap();
+        match msg {
+            ManagerMessage::SubscribeClient(_) => {}
+            _ => panic!("Expected SubscribeClient message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_events() {
+        use tokio::io::AsyncBufReadExt;
+
+        let mut state = State::new();
+        let monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        state.monitors.insert(1, monitor);
+
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let (stream_tx, stream_rx) = UnixStream::pair().unwrap();
+        let (_rx_read, tx_write) = stream_tx.into_split();
+
+        // Start subscription handler
+        handle_subscribe_client(tx_write, &event_tx, &state);
+
+        let mut reader = tokio::io::BufReader::new(stream_rx);
+        let mut line = String::new();
+
+        // 1. Check initial event
+        reader.read_line(&mut line).await.unwrap();
+        let json: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(json["event"], "state_change");
+        assert_eq!(json["monitor_id"], 1);
+        line.clear();
+
+        // 2. Check broadcast event
+        let event = StateEvent {
+            event: "state_change".into(),
+            monitor_id: 1,
+            selected_tags: 5,
+            occupied_tags: 0,
+        };
+        event_tx.send(event).unwrap();
+
+        reader.read_line(&mut line).await.unwrap();
+        let json: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(json["selected_tags"], 5);
     }
 }
