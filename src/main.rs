@@ -1,6 +1,7 @@
 use argh::FromArgs;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
@@ -8,7 +9,7 @@ use tokio::sync::mpsc;
 mod aerospace;
 mod state;
 
-use aerospace::{AerospaceMonitor, AerospaceWindow, AerospaceWorkspace};
+use aerospace::{AerospaceClient, AerospaceMonitor, AerospaceWindow, AerospaceWorkspace, RealClient};
 use state::{Monitor, State};
 
 #[derive(Debug, FromArgs)]
@@ -338,19 +339,23 @@ async fn run_server() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<ManagerMessage>(100);
     let (event_tx, _) = tokio::sync::broadcast::channel::<StateEvent>(16);
 
+    let client: Arc<dyn AerospaceClient> = Arc::new(RealClient);
+
     // --- State Manager Actor ---
     let event_tx_clone = event_tx.clone();
     let actor_tx = tx.clone(); // Clone for internal messages
+    let client_clone = client.clone();
     tokio::spawn(async move {
-        if let Ok(monitors) = aerospace::list_monitors().await {
-            initialize_all_monitors(&monitors).await;
+        let client = client_clone;
+        if let Ok(monitors) = client.list_monitors().await {
+            initialize_all_monitors(&client, &monitors).await;
         }
 
         let mut state = State::new();
         tracing::info!("State manager started");
 
         // Initial sync
-        match aerospace::list_monitors().await {
+        match client.list_monitors().await {
             Ok(monitors) => {
                 for m in monitors {
                     let visible_ws = m.monitor_id.to_string();
@@ -367,13 +372,13 @@ async fn run_server() -> anyhow::Result<()> {
         while let Some(msg) = rx.recv().await {
             match msg {
                 ManagerMessage::Ipc(cmd) => {
-                    handle_ipc_command_async(cmd, actor_tx.clone());
+                    handle_ipc_command_async(cmd, actor_tx.clone(), client.clone());
                 }
                 ManagerMessage::Internal(cmd) => {
-                    handle_internal_command(&mut state, cmd, &event_tx_clone);
+                    handle_internal_command(&mut state, cmd, &event_tx_clone, client.clone());
                 }
                 ManagerMessage::QueryClient(target, stream_tx) => {
-                    handle_query_client_async(target, stream_tx, actor_tx.clone());
+                    handle_query_client_async(target, stream_tx, actor_tx.clone(), client.clone());
                 }
                 ManagerMessage::SubscribeClient(mut stream_tx) => {
                     let mut event_rx = event_tx_clone.subscribe();
@@ -496,6 +501,7 @@ fn handle_query_client_async(
     target: QueryTarget,
     stream_tx: tokio::net::unix::OwnedWriteHalf,
     tx: mpsc::Sender<ManagerMessage>,
+    client: Arc<dyn AerospaceClient>,
 ) {
     tokio::spawn(async move {
         // We might need focused window/monitor depending on target, but let's just fetch them anyway or make it cleaner.
@@ -514,8 +520,8 @@ fn handle_query_client_async(
         };
 
         if needs_focus_info {
-            fw = aerospace::get_focused_window().await.ok().flatten();
-            fm = aerospace::get_focused_monitor().await.ok().flatten();
+            fw = client.get_focused_window().await.ok().flatten();
+            fm = client.get_focused_monitor().await.ok().flatten();
         }
 
         let _ = tx
@@ -527,11 +533,15 @@ fn handle_query_client_async(
 }
 
 // Spawns tasks to fetch external state, then sends InternalCommand back to Actor
-fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
+fn handle_ipc_command_async(
+    cmd: IpcCommand,
+    tx: mpsc::Sender<ManagerMessage>,
+    client: Arc<dyn AerospaceClient>,
+) {
     tokio::spawn(async move {
         match cmd {
             IpcCommand::TagView(tag) => {
-                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
                     .send(ManagerMessage::Internal(InternalCommand::HandleTagView(
                         m, tag,
@@ -539,7 +549,7 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
                     .await;
             }
             IpcCommand::TagToggle(tag) => {
-                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
                     .send(ManagerMessage::Internal(InternalCommand::HandleTagToggle(
                         m, tag,
@@ -547,14 +557,14 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
                     .await;
             }
             IpcCommand::TagLast => {
-                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
                     .send(ManagerMessage::Internal(InternalCommand::HandleTagLast(m)))
                     .await;
             }
             IpcCommand::TagSet(mask, monitor_id) => {
                 let m = if monitor_id.is_none() {
-                    aerospace::get_focused_monitor().await.ok().flatten()
+                    client.get_focused_monitor().await.ok().flatten()
                 } else {
                     None
                 };
@@ -565,8 +575,8 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
                     .await;
             }
             IpcCommand::WindowMove(tag) => {
-                let w = aerospace::get_focused_window().await.ok().flatten();
-                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let w = client.get_focused_window().await.ok().flatten();
+                let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
                     .send(ManagerMessage::Internal(InternalCommand::HandleWindowMove(
                         w, m, tag,
@@ -576,8 +586,8 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
             IpcCommand::WindowSet(mask, window_id) => {
                 let (w, m) = if window_id.is_none() {
                     (
-                        aerospace::get_focused_window().await.ok().flatten(),
-                        aerospace::get_focused_monitor().await.ok().flatten(),
+                        client.get_focused_window().await.ok().flatten(),
+                        client.get_focused_monitor().await.ok().flatten(),
                     )
                 } else {
                     (None, None)
@@ -589,8 +599,8 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
                     .await;
             }
             IpcCommand::WindowToggle(tag) => {
-                let w = aerospace::get_focused_window().await.ok().flatten();
-                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let w = client.get_focused_window().await.ok().flatten();
+                let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
                     .send(ManagerMessage::Internal(
                         InternalCommand::HandleWindowToggle(w, m, tag),
@@ -598,8 +608,8 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
                     .await;
             }
             IpcCommand::WindowMoveMonitor(target) => {
-                let w = aerospace::get_focused_window().await.ok().flatten();
-                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let w = client.get_focused_window().await.ok().flatten();
+                let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
                     .send(ManagerMessage::Internal(
                         InternalCommand::HandleWindowMoveMonitor(w, m, target),
@@ -608,21 +618,21 @@ fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
             }
             IpcCommand::Sync => {
                 // Fetch all needed info in parallel
-                let windows = aerospace::list_windows().await;
-                let monitors_result = aerospace::list_monitors().await;
+                let windows = client.list_windows().await;
+                let monitors_result = client.list_monitors().await;
 
                 let mut visible_workspaces = std::collections::HashMap::new();
                 if let Ok(ref monitors) = monitors_result {
                     for m in monitors {
-                        if let Ok(ws) = aerospace::get_visible_workspace(m.monitor_id).await {
+                        if let Ok(ws) = client.get_visible_workspace(m.monitor_id).await {
                             visible_workspaces.insert(m.monitor_id, ws);
                         }
                     }
                 }
 
-                let fw_workspace = aerospace::get_focused_workspace().await;
-                let fw_window = aerospace::get_focused_window().await;
-                let fw_monitor = aerospace::get_focused_monitor().await;
+                let fw_workspace = client.get_focused_workspace().await;
+                let fw_window = client.get_focused_window().await;
+                let fw_monitor = client.get_focused_monitor().await;
 
                 let _ = tx
                     .send(ManagerMessage::Internal(InternalCommand::HandleSync(
@@ -645,6 +655,7 @@ fn handle_internal_command(
     state: &mut State,
     cmd: InternalCommand,
     event_tx: &tokio::sync::broadcast::Sender<StateEvent>,
+    client: Arc<dyn AerospaceClient>,
 ) {
     match cmd {
         InternalCommand::HandleTagView(Some(m), tag) => {
@@ -662,9 +673,16 @@ fn handle_internal_command(
             if let Some((tags, selected_tags, visible_workspace)) = sync_data {
                 broadcast_state_change(state, m.monitor_id, event_tx);
                 let hidden_workspace = state.hidden_workspace.clone();
+                let client = client.clone();
                 tokio::spawn(async move {
-                    sync_monitor_state(&tags, selected_tags, &visible_workspace, &hidden_workspace)
-                        .await;
+                    sync_monitor_state(
+                        &client,
+                        &tags,
+                        selected_tags,
+                        &visible_workspace,
+                        &hidden_workspace,
+                    )
+                    .await;
                 });
             } else {
                 tracing::warn!("Monitor {} not found in state", m.monitor_id);
@@ -687,9 +705,16 @@ fn handle_internal_command(
             if let Some((tags, selected_tags, visible_workspace)) = sync_data {
                 broadcast_state_change(state, m.monitor_id, event_tx);
                 let hidden_workspace = state.hidden_workspace.clone();
+                let client = client.clone();
                 tokio::spawn(async move {
-                    sync_monitor_state(&tags, selected_tags, &visible_workspace, &hidden_workspace)
-                        .await;
+                    sync_monitor_state(
+                        &client,
+                        &tags,
+                        selected_tags,
+                        &visible_workspace,
+                        &hidden_workspace,
+                    )
+                    .await;
                 });
             }
         }
@@ -710,9 +735,16 @@ fn handle_internal_command(
             if let Some((tags, selected_tags, visible_workspace)) = sync_data {
                 broadcast_state_change(state, m.monitor_id, event_tx);
                 let hidden_workspace = state.hidden_workspace.clone();
+                let client = client.clone();
                 tokio::spawn(async move {
-                    sync_monitor_state(&tags, selected_tags, &visible_workspace, &hidden_workspace)
-                        .await;
+                    sync_monitor_state(
+                        &client,
+                        &tags,
+                        selected_tags,
+                        &visible_workspace,
+                        &hidden_workspace,
+                    )
+                    .await;
                 });
             }
         }
@@ -742,8 +774,10 @@ fn handle_internal_command(
                 if let Some((tags, selected_tags, visible_workspace)) = sync_data {
                     broadcast_state_change(state, mid, event_tx);
                     let hidden_workspace = state.hidden_workspace.clone();
+                    let client = client.clone();
                     tokio::spawn(async move {
                         sync_monitor_state(
+                            &client,
                             &tags,
                             selected_tags,
                             &visible_workspace,
@@ -789,17 +823,16 @@ fn handle_internal_command(
                     broadcast_state_change(state, mid, event_tx);
                     let hidden_workspace = state.hidden_workspace.clone();
 
-                    state
-                        .windows
-                        .entry(w.window_id)
-                        .or_insert(state::WindowInfo {
-                            id: w.window_id,
-                            app_name: w.app_name,
-                            title: w.window_title,
-                        });
+                    state.windows.entry(w.window_id).or_insert(state::WindowInfo {
+                        id: w.window_id,
+                        app_name: w.app_name,
+                        title: w.window_title,
+                    });
 
+                    let client = client.clone();
                     tokio::spawn(async move {
                         sync_monitor_state(
+                            &client,
                             &tags,
                             selected_tags,
                             &visible_workspace,
@@ -872,19 +905,18 @@ fn handle_internal_command(
                     // Update window info if available
                     if let Some(ref w) = focused_window {
                         if w.window_id == wid {
-                            state
-                                .windows
-                                .entry(w.window_id)
-                                .or_insert(state::WindowInfo {
-                                    id: w.window_id,
-                                    app_name: w.app_name.clone(),
-                                    title: w.window_title.clone(),
-                                });
+                            state.windows.entry(w.window_id).or_insert(state::WindowInfo {
+                                id: w.window_id,
+                                app_name: w.app_name.clone(),
+                                title: w.window_title.clone(),
+                            });
                         }
                     }
 
+                    let client = client.clone();
                     tokio::spawn(async move {
                         sync_monitor_state(
+                            &client,
                             &tags,
                             selected_tags,
                             &visible_workspace,
@@ -958,17 +990,16 @@ fn handle_internal_command(
                     broadcast_state_change(state, mid, event_tx);
                     let hidden_workspace = state.hidden_workspace.clone();
 
-                    state
-                        .windows
-                        .entry(w.window_id)
-                        .or_insert(state::WindowInfo {
-                            id: w.window_id,
-                            app_name: w.app_name,
-                            title: w.window_title,
-                        });
+                    state.windows.entry(w.window_id).or_insert(state::WindowInfo {
+                        id: w.window_id,
+                        app_name: w.app_name,
+                        title: w.window_title,
+                    });
 
+                    let client = client.clone();
                     tokio::spawn(async move {
                         sync_monitor_state(
+                            &client,
                             &tags,
                             selected_tags,
                             &visible_workspace,
@@ -1022,10 +1053,11 @@ fn handle_internal_command(
                     // 3. Move via AeroSpace (Async)
                     if !target_workspace.is_empty() {
                         let window_id = w.window_id;
+                        let client = client.clone();
                         tokio::spawn(async move {
-                            if let Err(e) =
-                                aerospace::move_node_to_workspace(window_id, &target_workspace)
-                                    .await
+                            if let Err(e) = client
+                                .move_node_to_workspace(window_id, &target_workspace)
+                                .await
                             {
                                 tracing::error!(
                                     "Failed to move window to monitor {}: {}",
@@ -1033,7 +1065,7 @@ fn handle_internal_command(
                                     e
                                 );
                             }
-                            let _ = aerospace::focus_window(window_id).await;
+                            let _ = client.focus_window(window_id).await;
                         });
                     }
                 }
@@ -1213,8 +1245,9 @@ fn handle_internal_command(
 
             if new_monitor_detected {
                 let monitors_clone = monitors.clone();
+                let client = client.clone();
                 tokio::spawn(async move {
-                    initialize_all_monitors(&monitors_clone).await;
+                    initialize_all_monitors(&client, &monitors_clone).await;
                 });
             }
             let removed_monitor_ids: Vec<u32> = state
@@ -1265,8 +1298,10 @@ fn handle_internal_command(
                             let visible_workspace = rescue_monitor.visible_workspace.clone();
                             let hidden_workspace = state.hidden_workspace.clone();
 
+                            let client = client.clone();
                             tokio::spawn(async move {
                                 sync_monitor_state(
+                                    &client,
                                     &tags,
                                     selected_tags,
                                     &visible_workspace,
@@ -1420,8 +1455,10 @@ fn handle_internal_command(
                                 broadcast_state_change(state, mid, event_tx);
                                 let hidden_workspace = state.hidden_workspace.clone();
 
+                                let client = client.clone();
                                 tokio::spawn(async move {
                                     sync_monitor_state(
+                                        &client,
                                         &tags,
                                         selected_tags,
                                         &visible_workspace,
@@ -1444,10 +1481,11 @@ fn handle_internal_command(
                                             current_monitor.monitor_id,
                                             restore_ws
                                         );
+                                        let client = client.clone();
                                         tokio::spawn(async move {
                                             // Wait a bit to let the primary sync happen first?
                                             // Or just fire it. AeroSpace queues commands usually.
-                                            let _ = aerospace::focus_workspace(&restore_ws).await;
+                                            let _ = client.focus_workspace(&restore_ws).await;
                                         });
                                     }
                                 }
@@ -1472,6 +1510,7 @@ fn handle_internal_command(
 }
 
 async fn sync_monitor_state(
+    client: &Arc<dyn AerospaceClient>,
     tags: &[state::Tag],
     selected_tags: u32,
     visible_workspace: &str,
@@ -1488,7 +1527,10 @@ async fn sync_monitor_state(
         if (selected_tags & (1 << i)) == 0 {
             for &window_id in &tag.window_ids {
                 let hidden_ws = format!("h-{}", window_id);
-                if let Err(e) = aerospace::move_node_to_workspace(window_id, &hidden_ws).await {
+                if let Err(e) = client
+                    .move_node_to_workspace(window_id, &hidden_ws)
+                    .await
+                {
                     tracing::error!("Failed to hide window {}: {}", window_id, e);
                 }
             }
@@ -1499,8 +1541,9 @@ async fn sync_monitor_state(
     for (i, tag) in tags.iter().enumerate() {
         if (selected_tags & (1 << i)) != 0 {
             for &window_id in &tag.window_ids {
-                if let Err(e) =
-                    aerospace::move_node_to_workspace(window_id, visible_workspace).await
+                if let Err(e) = client
+                    .move_node_to_workspace(window_id, visible_workspace)
+                    .await
                 {
                     tracing::error!("Failed to show window {}: {}", window_id, e);
                 }
@@ -1513,12 +1556,15 @@ async fn sync_monitor_state(
         "Restoring focus to visible workspace: {}",
         visible_workspace
     );
-    if let Err(e) = aerospace::focus_workspace(visible_workspace).await {
+    if let Err(e) = client.focus_workspace(visible_workspace).await {
         tracing::error!("Failed to restore focus to {}: {}", visible_workspace, e);
     }
 }
 
-async fn initialize_all_monitors(monitors: &[AerospaceMonitor]) {
+async fn initialize_all_monitors(
+    client: &Arc<dyn AerospaceClient>,
+    monitors: &[AerospaceMonitor],
+) {
     if monitors.is_empty() {
         return;
     }
@@ -1529,7 +1575,7 @@ async fn initialize_all_monitors(monitors: &[AerospaceMonitor]) {
     let mut current_state: std::collections::HashMap<u32, String> =
         std::collections::HashMap::new();
     for m in &sorted {
-        if let Ok(ws) = aerospace::get_visible_workspace(m.monitor_id).await {
+        if let Ok(ws) = client.get_visible_workspace(m.monitor_id).await {
             current_state.insert(m.monitor_id, ws);
         }
     }
@@ -1558,28 +1604,30 @@ async fn initialize_all_monitors(monitors: &[AerospaceMonitor]) {
     // Ensure all required workspaces exist by focusing them once
     for m in &sorted {
         let ws_name = m.monitor_id.to_string();
-        let _ = aerospace::focus_workspace(&ws_name).await;
+        let _ = client.focus_workspace(&ws_name).await;
     }
 
     // Explicitly move each workspace to its correct monitor
     for m in &sorted {
         let ws_name = m.monitor_id.to_string();
         tracing::debug!("Moving workspace {} to monitor {}", ws_name, m.monitor_id);
-        let _ = aerospace::move_workspace_to_monitor(&ws_name, m.monitor_id).await;
+        let _ = client
+            .move_workspace_to_monitor(&ws_name, m.monitor_id)
+            .await;
     }
 
     // Focus each monitor on its correct workspace
     for m in &sorted {
         let ws_name = m.monitor_id.to_string();
-        let _ = aerospace::focus_monitor(m.monitor_id).await;
-        let _ = aerospace::focus_workspace(&ws_name).await;
+        let _ = client.focus_monitor(m.monitor_id).await;
+        let _ = client.focus_workspace(&ws_name).await;
     }
 
     // Focus the primary monitor (lowest ID) so user sees the change
     if let Some(primary) = sorted.first() {
         tracing::info!("Focusing primary monitor {}", primary.monitor_id);
-        let _ = aerospace::focus_monitor(primary.monitor_id).await;
-        let _ = aerospace::focus_workspace(&primary.monitor_id.to_string()).await;
+        let _ = client.focus_monitor(primary.monitor_id).await;
+        let _ = client.focus_workspace(&primary.monitor_id.to_string()).await;
     }
 
     tracing::info!("Workspace realignment complete");
@@ -1592,4 +1640,82 @@ async fn send_client_command(cmd: IpcCommand) -> anyhow::Result<()> {
     stream.write_all(&data).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aerospace::MockAerospaceClient;
+
+    #[tokio::test]
+    async fn test_window_toggle_safety_guard() {
+        let mut state = State::new();
+        let mut monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        // Window 100 is in Tag 0
+        monitor.tags[0].window_ids.push(100);
+        state.monitors.insert(1, monitor);
+
+        let mock = MockAerospaceClient::new();
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        // Try to toggle Tag 0 for Window 100 (which is the only tag it has)
+        let cmd = InternalCommand::HandleWindowToggle(
+            Some(AerospaceWindow {
+                window_id: 100,
+                app_name: "TestApp".into(),
+                window_title: "TestWindow".into(),
+                workspace: None,
+            }),
+            None,
+            0,
+        );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        // Verify: Window 100 should STILL be in Tag 0
+        let m = state.monitors.get(&1).unwrap();
+        assert!(
+            m.tags[0].window_ids.contains(&100),
+            "Safety guard failed: Last tag was removed!"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_window_toggle_normal() {
+        let mut state = State::new();
+        let mut monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        // Window 100 is in Tag 0 AND Tag 1
+        monitor.tags[0].window_ids.push(100);
+        monitor.tags[1].window_ids.push(100);
+        state.monitors.insert(1, monitor);
+
+        let mock = MockAerospaceClient::new();
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        // Toggle Tag 0 -> Should be removed because it has Tag 1 also
+        let cmd = InternalCommand::HandleWindowToggle(
+            Some(AerospaceWindow {
+                window_id: 100,
+                app_name: "TestApp".into(),
+                window_title: "TestWindow".into(),
+                workspace: None,
+            }),
+            None,
+            0,
+        );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        let m = state.monitors.get(&1).unwrap();
+        assert!(
+            !m.tags[0].window_ids.contains(&100),
+            "Window should be removed from Tag 0"
+        );
+        assert!(
+            m.tags[1].window_ids.contains(&100),
+            "Window should remain in Tag 1"
+        );
+    }
 }
