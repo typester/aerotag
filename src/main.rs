@@ -509,6 +509,7 @@ fn handle_query_client_async(
         let needs_focus_info = match &target {
             QueryTarget::Window(None) => true,
             QueryTarget::Monitor(None) => true,
+            QueryTarget::State => true,
             _ => false,
         };
 
