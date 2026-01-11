@@ -31,6 +31,7 @@ enum SubCommand {
     WindowMoveMonitor(WindowMoveMonitorCommand),
     WindowSet(WindowSetCommand),
     Query(QueryCommand),
+    Version(VersionCommand),
     Hook(HookCommand),
     Subscribe(SubscribeCommand),
 }
@@ -39,6 +40,11 @@ enum SubCommand {
 /// Launch workspace manager daemon
 #[argh(subcommand, name = "server")]
 struct ServerCommand {}
+
+#[derive(Debug, FromArgs)]
+/// Show version info
+#[argh(subcommand, name = "version")]
+struct VersionCommand {}
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
 /// Switch to a specific tag on the focused monitor
@@ -263,6 +269,10 @@ async fn main() -> anyhow::Result<()> {
             send_client_command(IpcCommand::WindowSet(cmd.mask, cmd.window_id)).await
         }
         SubCommand::Query(cmd) => run_query(cmd).await,
+        SubCommand::Version(_) => {
+            println!("v{}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         SubCommand::Hook(_) => send_client_command(IpcCommand::Sync).await,
         SubCommand::Subscribe(_) => run_subscriber().await,
     }
