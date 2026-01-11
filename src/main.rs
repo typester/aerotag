@@ -1160,7 +1160,10 @@ async fn initialize_all_monitors(monitors: &[AerospaceMonitor]) {
     tracing::info!(
         "Realigning workspaces: current={:?}, expected={:?}",
         current_state,
-        sorted.iter().map(|m| (m.monitor_id, m.monitor_id.to_string())).collect::<Vec<_>>()
+        sorted
+            .iter()
+            .map(|m| (m.monitor_id, m.monitor_id.to_string()))
+            .collect::<Vec<_>>()
     );
 
     // Ensure all required workspaces exist by focusing them once
