@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::aerospace::{AerospaceMonitor, AerospaceWindow, AerospaceWorkspace};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IpcCommand {

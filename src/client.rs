@@ -1,8 +1,8 @@
+use crate::cli::{QueryCommand, QuerySubCommand};
+use crate::ipc::{IpcCommand, QueryTarget};
+use crate::util::get_socket_path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use crate::ipc::{IpcCommand, QueryTarget};
-use crate::cli::{QueryCommand, QuerySubCommand};
-use crate::util::get_socket_path;
 
 pub async fn send_client_command(cmd: IpcCommand) -> anyhow::Result<()> {
     let socket_path = get_socket_path();

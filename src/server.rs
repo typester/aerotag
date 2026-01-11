@@ -341,7 +341,7 @@ fn handle_internal_command(
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
                 monitor.select_tag(tag);
-                sync_data = Some(( 
+                sync_data = Some((
                     monitor.tags.clone(),
                     monitor.selected_tags,
                     monitor.visible_workspace.clone(),
@@ -373,7 +373,7 @@ fn handle_internal_command(
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
                 monitor.toggle_tag(tag);
-                sync_data = Some(( 
+                sync_data = Some((
                     monitor.tags.clone(),
                     monitor.selected_tags,
                     monitor.visible_workspace.clone(),
@@ -403,7 +403,7 @@ fn handle_internal_command(
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
                 monitor.restore_last_tags();
-                sync_data = Some(( 
+                sync_data = Some((
                     monitor.tags.clone(),
                     monitor.selected_tags,
                     monitor.visible_workspace.clone(),
@@ -442,7 +442,7 @@ fn handle_internal_command(
                 if let Some(monitor) = state.get_monitor_mut(mid) {
                     monitor.previous_tags = monitor.selected_tags;
                     monitor.selected_tags = mask;
-                    sync_data = Some(( 
+                    sync_data = Some((
                         monitor.tags.clone(),
                         monitor.selected_tags,
                         monitor.visible_workspace.clone(),
@@ -490,7 +490,7 @@ fn handle_internal_command(
                     if (tag as usize) < monitor.tags.len() {
                         monitor.tags[tag as usize].window_ids.push(w.window_id);
                     }
-                    sync_data = Some(( 
+                    sync_data = Some((
                         monitor.tags.clone(),
                         monitor.selected_tags,
                         monitor.visible_workspace.clone(),
@@ -569,7 +569,7 @@ fn handle_internal_command(
                             }
                         }
                     }
-                    sync_data = Some(( 
+                    sync_data = Some((
                         monitor.tags.clone(),
                         monitor.selected_tags,
                         monitor.visible_workspace.clone(),
@@ -583,14 +583,11 @@ fn handle_internal_command(
                     // Update window info if available
                     if let Some(ref w) = focused_window {
                         if w.window_id == wid {
-                            state
-                                .windows
-                                .entry(w.window_id)
-                                .or_insert(WindowInfo {
-                                    id: w.window_id,
-                                    app_name: w.app_name.clone(),
-                                    title: w.window_title.clone(),
-                                });
+                            state.windows.entry(w.window_id).or_insert(WindowInfo {
+                                id: w.window_id,
+                                app_name: w.app_name.clone(),
+                                title: w.window_title.clone(),
+                            });
                         }
                     }
 
@@ -626,7 +623,7 @@ fn handle_internal_command(
                 if let Some(monitor) = state.get_monitor_mut(mid) {
                     let tag_idx = tag as usize;
                     if tag_idx < monitor.tags.len() {
-                        let already_in_tag = 
+                        let already_in_tag =
                             monitor.tags[tag_idx].window_ids.contains(&w.window_id);
 
                         let mut change_needed = false;
@@ -658,7 +655,7 @@ fn handle_internal_command(
                         }
 
                         if change_needed {
-                            sync_data = Some(( 
+                            sync_data = Some((
                                 monitor.tags.clone(),
                                 monitor.selected_tags,
                                 monitor.visible_workspace.clone(),
@@ -884,7 +881,7 @@ fn handle_internal_command(
             tracing::debug!("AeroSpace reported {} windows", windows.len());
 
             // 0. Update monitors and handle removed ones
-            let current_monitor_ids: std::collections::HashSet<u32> = 
+            let current_monitor_ids: std::collections::HashSet<u32> =
                 monitors.iter().map(|m| m.monitor_id).collect();
 
             // Add or update monitors
@@ -999,7 +996,7 @@ fn handle_internal_command(
             }
 
             // 1. Identify and remove closed windows
-            let current_ids: std::collections::HashSet<u32> = 
+            let current_ids: std::collections::HashSet<u32> =
                 windows.iter().map(|w| w.window_id).collect();
             let stale_ids: Vec<u32> = state
                 .windows
@@ -1125,43 +1122,43 @@ fn handle_internal_command(
                             let mut sync_data = None;
                             if let Some(monitor) = state.get_monitor_mut(mid) {
                                 monitor.select_tag(tag);
-                                sync_data = Some(( 
+                                sync_data = Some((
                                     monitor.tags.clone(),
                                     monitor.selected_tags,
                                     monitor.visible_workspace.clone(),
                                 ));
                             }
 
-                                                        if let Some((tags, selected_tags, visible_workspace)) = sync_data {
-                                                            broadcast_state_change(state, mid, event_tx);
-                                                            let hidden_workspace = state.hidden_workspace.clone();
-                            
-                                                            let client = client.clone();
-                                                            tokio::spawn(async move {
-                                                                sync_monitor_state(
-                                                                    &client,
-                                                                    &tags,
-                                                                    selected_tags,
-                                                                    &visible_workspace,
-                                                                    &hidden_workspace,
-                                                                )
-                                                                .await;
-                                                            });
-                                                        }
-                            
-                                                        // If the focus was on a WRONG monitor (e.g. clicked Dock on Monitor B for window on Monitor A),
-                                                        // Monitor B is now stuck on "h-xxx". We must restore it to its visible workspace.
-                                                        if let Ok(Some(current_monitor)) = &fw_monitor {
-                                                            if current_monitor.monitor_id != mid {
-                                                                if let Some(wrong_monitor) =
-                                                                    state.monitors.get(&current_monitor.monitor_id)
-                                                                {
-                                                                    let restore_ws = wrong_monitor.visible_workspace.clone();
-                                                                    tracing::info!(
-                                                                        "Restoring monitor {} from hidden workspace to {}",
-                                                                        current_monitor.monitor_id,
-                                                                        restore_ws
-                                                                    );
+                            if let Some((tags, selected_tags, visible_workspace)) = sync_data {
+                                broadcast_state_change(state, mid, event_tx);
+                                let hidden_workspace = state.hidden_workspace.clone();
+
+                                let client = client.clone();
+                                tokio::spawn(async move {
+                                    sync_monitor_state(
+                                        &client,
+                                        &tags,
+                                        selected_tags,
+                                        &visible_workspace,
+                                        &hidden_workspace,
+                                    )
+                                    .await;
+                                });
+                            }
+
+                            // If the focus was on a WRONG monitor (e.g. clicked Dock on Monitor B for window on Monitor A),
+                            // Monitor B is now stuck on "h-xxx". We must restore it to its visible workspace.
+                            if let Ok(Some(current_monitor)) = &fw_monitor {
+                                if current_monitor.monitor_id != mid {
+                                    if let Some(wrong_monitor) =
+                                        state.monitors.get(&current_monitor.monitor_id)
+                                    {
+                                        let restore_ws = wrong_monitor.visible_workspace.clone();
+                                        tracing::info!(
+                                            "Restoring monitor {} from hidden workspace to {}",
+                                            current_monitor.monitor_id,
+                                            restore_ws
+                                        );
                                         let client = client.clone();
                                         tokio::spawn(async move {
                                             // Wait a bit to let the primary sync happen first?
@@ -1208,10 +1205,7 @@ async fn sync_monitor_state(
         if (selected_tags & (1 << i)) == 0 {
             for &window_id in &tag.window_ids {
                 let hidden_ws = format!("h-{}", window_id);
-                if let Err(e) = client
-                    .move_node_to_workspace(window_id, &hidden_ws)
-                    .await
-                {
+                if let Err(e) = client.move_node_to_workspace(window_id, &hidden_ws).await {
                     tracing::error!("Failed to hide window {}: {}", window_id, e);
                 }
             }
@@ -1242,10 +1236,7 @@ async fn sync_monitor_state(
     }
 }
 
-async fn initialize_all_monitors(
-    client: &Arc<dyn AerospaceClient>,
-    monitors: &[AerospaceMonitor],
-) {
+async fn initialize_all_monitors(client: &Arc<dyn AerospaceClient>, monitors: &[AerospaceMonitor]) {
     if monitors.is_empty() {
         return;
     }
@@ -1253,7 +1244,7 @@ async fn initialize_all_monitors(
     let mut sorted: Vec<_> = monitors.to_vec();
     sorted.sort_by_key(|m| m.monitor_id);
 
-    let mut current_state: std::collections::HashMap<u32, String> = 
+    let mut current_state: std::collections::HashMap<u32, String> =
         std::collections::HashMap::new();
     for m in &sorted {
         if let Ok(ws) = client.get_visible_workspace(m.monitor_id).await {
@@ -1308,7 +1299,9 @@ async fn initialize_all_monitors(
     if let Some(primary) = sorted.first() {
         tracing::info!("Focusing primary monitor {}", primary.monitor_id);
         let _ = client.focus_monitor(primary.monitor_id).await;
-        let _ = client.focus_workspace(&primary.monitor_id.to_string()).await;
+        let _ = client
+            .focus_workspace(&primary.monitor_id.to_string())
+            .await;
     }
 
     tracing::info!("Workspace realignment complete");
@@ -1419,7 +1412,10 @@ mod tests {
 
         let m = state.monitors.get(&1).unwrap();
         assert!(m.tags[0].window_ids.contains(&100));
-        assert!(m.tags[1].window_ids.contains(&100), "Window should be added to Tag 1");
+        assert!(
+            m.tags[1].window_ids.contains(&100),
+            "Window should be added to Tag 1"
+        );
     }
 
     #[tokio::test]
@@ -1448,8 +1444,14 @@ mod tests {
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
         let m = state.monitors.get(&1).unwrap();
-        assert!(!m.tags[0].window_ids.contains(&100), "Should be removed from Tag 0");
-        assert!(m.tags[2].window_ids.contains(&100), "Should be added to Tag 2");
+        assert!(
+            !m.tags[0].window_ids.contains(&100),
+            "Should be removed from Tag 0"
+        );
+        assert!(
+            m.tags[2].window_ids.contains(&100),
+            "Should be added to Tag 2"
+        );
     }
 
     #[tokio::test]
@@ -1510,24 +1512,19 @@ mod tests {
 
         // Mock setup for focus info
         let mock = MockAerospaceClient::new();
-        
+
         let client: Arc<dyn AerospaceClient> = Arc::new(mock);
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         let (stream_tx, stream_rx) = UnixStream::pair().unwrap();
         let (_rx_read, tx_write) = stream_tx.into_split(); // We need OwnedWriteHalf to pass
-        
+
         let focused_monitor = Some(AerospaceMonitor {
             monitor_id: 1,
             monitor_name: "Main".into(),
         });
 
-        let cmd = InternalCommand::HandleQuery(
-            None,
-            focused_monitor,
-            QueryTarget::State,
-            tx_write,
-        );
+        let cmd = InternalCommand::HandleQuery(None, focused_monitor, QueryTarget::State, tx_write);
 
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
@@ -1582,11 +1579,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Set Monitor 1 tags to mask 5 (Tag 0 and Tag 2)
-        let cmd = InternalCommand::HandleTagSet(
-            None,
-            5,
-            Some(1),
-        );
+        let cmd = InternalCommand::HandleTagSet(None, 5, Some(1));
 
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
@@ -1600,7 +1593,7 @@ mod tests {
         // Monitor 1 (focused) and Monitor 2
         let mut m1 = Monitor::new(1, "M1".into(), "1".into());
         let m2 = Monitor::new(2, "M2".into(), "2".into());
-        
+
         // Window 100 is in Monitor 1, Tag 0
         m1.tags[0].window_ids.push(100);
         state.monitors.insert(1, m1);
@@ -1625,15 +1618,26 @@ mod tests {
                 window_title: "Title".into(),
                 workspace: None,
             }),
-            Some(AerospaceMonitor { monitor_id: 1, monitor_name: "M1".into() }),
+            Some(AerospaceMonitor {
+                monitor_id: 1,
+                monitor_name: "M1".into(),
+            }),
             "next".into(),
         );
 
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
         // Window should be removed from M1 and added to M2
-        assert!(!state.monitors.get(&1).unwrap().tags[0].window_ids.contains(&100));
-        assert!(state.monitors.get(&2).unwrap().tags[0].window_ids.contains(&100));
+        assert!(
+            !state.monitors.get(&1).unwrap().tags[0]
+                .window_ids
+                .contains(&100)
+        );
+        assert!(
+            state.monitors.get(&2).unwrap().tags[0]
+                .window_ids
+                .contains(&100)
+        );
     }
 
     #[tokio::test]
