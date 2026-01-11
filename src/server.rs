@@ -45,13 +45,18 @@ pub async fn run_server() -> anyhow::Result<()> {
         while let Some(msg) = rx.recv().await {
             match msg {
                 ManagerMessage::Ipc(cmd) => {
-                    handle_ipc_command_async(cmd, actor_tx.clone(), client.clone());
+                    tokio::spawn(handle_ipc_command(cmd, actor_tx.clone(), client.clone()));
                 }
                 ManagerMessage::Internal(cmd) => {
                     handle_internal_command(&mut state, *cmd, &event_tx_clone, client.clone());
                 }
                 ManagerMessage::QueryClient(target, stream_tx) => {
-                    handle_query_client_async(target, stream_tx, actor_tx.clone(), client.clone());
+                    tokio::spawn(handle_query_client(
+                        target,
+                        stream_tx,
+                        actor_tx.clone(),
+                        client.clone(),
+                    ));
                 }
                 ManagerMessage::SubscribeClient(stream_tx) => {
                     handle_subscribe_client(stream_tx, &event_tx_clone, &state);
@@ -179,153 +184,149 @@ fn broadcast_state_change(
     }
 }
 
-fn handle_query_client_async(
+async fn handle_query_client(
     target: QueryTarget,
     stream_tx: tokio::net::unix::OwnedWriteHalf,
     tx: mpsc::Sender<ManagerMessage>,
     client: Arc<dyn AerospaceClient>,
 ) {
-    tokio::spawn(async move {
-        let mut fw: Option<AerospaceWindow> = None;
-        let mut fm: Option<AerospaceMonitor> = None;
+    let mut fw: Option<AerospaceWindow> = None;
+    let mut fm: Option<AerospaceMonitor> = None;
 
-        let needs_focus_info = matches!(
-            &target,
-            QueryTarget::Window(None) | QueryTarget::Monitor(None) | QueryTarget::State
-        );
+    let needs_focus_info = matches!(
+        &target,
+        QueryTarget::Window(None) | QueryTarget::Monitor(None) | QueryTarget::State
+    );
 
-        if needs_focus_info {
-            fw = client.get_focused_window().await.ok().flatten();
-            fm = client.get_focused_monitor().await.ok().flatten();
-        }
+    if needs_focus_info {
+        fw = client.get_focused_window().await.ok().flatten();
+        fm = client.get_focused_monitor().await.ok().flatten();
+    }
 
-        let _ = tx
-            .send(ManagerMessage::Internal(Box::new(InternalCommand::Query(
-                fw, fm, target, stream_tx,
-            ))))
-            .await;
-    });
+    let _ = tx
+        .send(ManagerMessage::Internal(Box::new(InternalCommand::Query(
+            fw, fm, target, stream_tx,
+        ))))
+        .await;
 }
 
 // Spawns tasks to fetch external state, then sends InternalCommand back to Actor
-fn handle_ipc_command_async(
+async fn handle_ipc_command(
     cmd: IpcCommand,
     tx: mpsc::Sender<ManagerMessage>,
     client: Arc<dyn AerospaceClient>,
 ) {
-    tokio::spawn(async move {
-        match cmd {
-            IpcCommand::TagView(tag) => {
-                let m = client.get_focused_monitor().await.ok().flatten();
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(
-                        InternalCommand::TagView(m, tag),
-                    )))
-                    .await;
-            }
-            IpcCommand::TagToggle(tag) => {
-                let m = client.get_focused_monitor().await.ok().flatten();
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(
-                        InternalCommand::TagToggle(m, tag),
-                    )))
-                    .await;
-            }
-            IpcCommand::TagLast => {
-                let m = client.get_focused_monitor().await.ok().flatten();
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(
-                        InternalCommand::TagLast(m),
-                    )))
-                    .await;
-            }
-            IpcCommand::TagSet(mask, monitor_id) => {
-                let m = if monitor_id.is_none() {
-                    client.get_focused_monitor().await.ok().flatten()
-                } else {
-                    None
-                };
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(InternalCommand::TagSet(
-                        m, mask, monitor_id,
-                    ))))
-                    .await;
-            }
-            IpcCommand::WindowMove(tag) => {
-                let w = client.get_focused_window().await.ok().flatten();
-                let m = client.get_focused_monitor().await.ok().flatten();
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(
-                        InternalCommand::WindowMove(w, m, tag),
-                    )))
-                    .await;
-            }
-            IpcCommand::WindowSet(mask, window_id) => {
-                let (w, m) = if window_id.is_none() {
-                    (
-                        client.get_focused_window().await.ok().flatten(),
-                        client.get_focused_monitor().await.ok().flatten(),
-                    )
-                } else {
-                    (None, None)
-                };
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(
-                        InternalCommand::WindowSet(w, m, mask, window_id),
-                    )))
-                    .await;
-            }
-            IpcCommand::WindowToggle(tag) => {
-                let w = client.get_focused_window().await.ok().flatten();
-                let m = client.get_focused_monitor().await.ok().flatten();
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(
-                        InternalCommand::WindowToggle(w, m, tag),
-                    )))
-                    .await;
-            }
-            IpcCommand::WindowMoveMonitor(target) => {
-                let w = client.get_focused_window().await.ok().flatten();
-                let m = client.get_focused_monitor().await.ok().flatten();
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(
-                        InternalCommand::WindowMoveMonitor(w, m, target),
-                    )))
-                    .await;
-            }
-            IpcCommand::Sync => {
-                // Fetch all needed info in parallel
-                let windows = client.list_windows().await;
-                let monitors_result = client.list_monitors().await;
+    match cmd {
+        IpcCommand::TagView(tag) => {
+            let m = client.get_focused_monitor().await.ok().flatten();
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(
+                    InternalCommand::TagView(m, tag),
+                )))
+                .await;
+        }
+        IpcCommand::TagToggle(tag) => {
+            let m = client.get_focused_monitor().await.ok().flatten();
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(
+                    InternalCommand::TagToggle(m, tag),
+                )))
+                .await;
+        }
+        IpcCommand::TagLast => {
+            let m = client.get_focused_monitor().await.ok().flatten();
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(
+                    InternalCommand::TagLast(m),
+                )))
+                .await;
+        }
+        IpcCommand::TagSet(mask, monitor_id) => {
+            let m = if monitor_id.is_none() {
+                client.get_focused_monitor().await.ok().flatten()
+            } else {
+                None
+            };
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(InternalCommand::TagSet(
+                    m, mask, monitor_id,
+                ))))
+                .await;
+        }
+        IpcCommand::WindowMove(tag) => {
+            let w = client.get_focused_window().await.ok().flatten();
+            let m = client.get_focused_monitor().await.ok().flatten();
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(
+                    InternalCommand::WindowMove(w, m, tag),
+                )))
+                .await;
+        }
+        IpcCommand::WindowSet(mask, window_id) => {
+            let (w, m) = if window_id.is_none() {
+                (
+                    client.get_focused_window().await.ok().flatten(),
+                    client.get_focused_monitor().await.ok().flatten(),
+                )
+            } else {
+                (None, None)
+            };
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(
+                    InternalCommand::WindowSet(w, m, mask, window_id),
+                )))
+                .await;
+        }
+        IpcCommand::WindowToggle(tag) => {
+            let w = client.get_focused_window().await.ok().flatten();
+            let m = client.get_focused_monitor().await.ok().flatten();
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(
+                    InternalCommand::WindowToggle(w, m, tag),
+                )))
+                .await;
+        }
+        IpcCommand::WindowMoveMonitor(target) => {
+            let w = client.get_focused_window().await.ok().flatten();
+            let m = client.get_focused_monitor().await.ok().flatten();
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(
+                    InternalCommand::WindowMoveMonitor(w, m, target),
+                )))
+                .await;
+        }
+        IpcCommand::Sync => {
+            // Fetch all needed info in parallel
+            let windows = client.list_windows().await;
+            let monitors_result = client.list_monitors().await;
 
-                let mut visible_workspaces = std::collections::HashMap::new();
-                if let Ok(ref monitors) = monitors_result {
-                    for m in monitors {
-                        if let Ok(ws) = client.get_visible_workspace(m.monitor_id).await {
-                            visible_workspaces.insert(m.monitor_id, ws);
-                        }
+            let mut visible_workspaces = std::collections::HashMap::new();
+            if let Ok(ref monitors) = monitors_result {
+                for m in monitors {
+                    if let Ok(ws) = client.get_visible_workspace(m.monitor_id).await {
+                        visible_workspaces.insert(m.monitor_id, ws);
                     }
                 }
-
-                let fw_workspace = client.get_focused_workspace().await;
-                let fw_window = client.get_focused_window().await;
-                let fw_monitor = client.get_focused_monitor().await;
-
-                let _ = tx
-                    .send(ManagerMessage::Internal(Box::new(InternalCommand::Sync(
-                        windows,
-                        monitors_result,
-                        visible_workspaces,
-                        fw_workspace,
-                        fw_window,
-                        fw_monitor,
-                    ))))
-                    .await;
             }
-            IpcCommand::Subscribe => {} // Already handled
-            IpcCommand::Query(_) => {}  // Handled via QueryClient message
+
+            let fw_workspace = client.get_focused_workspace().await;
+            let fw_window = client.get_focused_window().await;
+            let fw_monitor = client.get_focused_monitor().await;
+
+            let _ = tx
+                .send(ManagerMessage::Internal(Box::new(InternalCommand::Sync(
+                    windows,
+                    monitors_result,
+                    visible_workspaces,
+                    fw_workspace,
+                    fw_window,
+                    fw_monitor,
+                ))))
+                .await;
         }
-    });
+        IpcCommand::Subscribe => {} // Already handled
+        IpcCommand::Query(_) => {}  // Handled via QueryClient message
+    }
 }
 
 fn handle_internal_command(
@@ -535,8 +536,14 @@ fn handle_internal_command(
                 // Find monitor for this window
                 if let Some(mid) = state.find_monitor_by_window(wid) {
                     target_monitor_id = Some(mid);
-                } else if let Some(m) = focused_monitor {
-                    target_monitor_id = Some(m.monitor_id);
+                } else {
+                    // If not found in tags, maybe use focused monitor or search?
+                    // For now, if we can't find the monitor, we can't update tags on a monitor.
+                    // But if it's a new window, maybe we assign it to focused monitor?
+                    // Let's stick to existing logic: find by window, else focused monitor.
+                    if let Some(m) = focused_monitor {
+                        target_monitor_id = Some(m.monitor_id);
+                    }
                 }
             } else if let Some(ref w) = focused_window {
                 target_window_id = Some(w.window_id);
@@ -1647,7 +1654,7 @@ mod tests {
         // Check if actor receives SubscribeClient message
         let msg = rx.recv().await.unwrap();
         match msg {
-            ManagerMessage::SubscribeClient(_) => {}
+            ManagerMessage::SubscribeClient(_) => {} // Expected
             _ => panic!("Expected SubscribeClient message"),
         }
     }
