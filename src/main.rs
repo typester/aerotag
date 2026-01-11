@@ -1814,7 +1814,7 @@ mod tests {
         state.monitors.insert(1, monitor);
 
         // Mock setup for focus info
-        let mut mock = MockAerospaceClient::new();
+        let mock = MockAerospaceClient::new();
         // Since we pass None for focused_window/monitor in HandleQuery command below,
         // the logic inside HandleQuery logic doesn't call client calls.
         // Wait, HandleQuery logic uses `focused_monitor` passed in arguments.
@@ -1826,7 +1826,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         let (stream_tx, stream_rx) = UnixStream::pair().unwrap();
-        let (mut _rx_read, mut tx_write) = stream_tx.into_split(); // We need OwnedWriteHalf to pass
+        let (_rx_read, tx_write) = stream_tx.into_split(); // We need OwnedWriteHalf to pass
         // But UnixStream::pair() returns (UnixStream, UnixStream).
         // stream_tx is a Stream.
         // InternalCommand expects OwnedWriteHalf.

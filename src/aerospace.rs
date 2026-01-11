@@ -32,7 +32,6 @@ pub struct AerospaceWorkspace {
 pub trait AerospaceClient: Send + Sync {
     async fn list_monitors(&self) -> anyhow::Result<Vec<AerospaceMonitor>>;
     async fn list_windows(&self) -> anyhow::Result<Vec<AerospaceWindow>>;
-    async fn list_workspaces(&self) -> anyhow::Result<Vec<AerospaceWorkspace>>;
     async fn get_focused_monitor(&self) -> anyhow::Result<Option<AerospaceMonitor>>;
     async fn get_focused_window(&self) -> anyhow::Result<Option<AerospaceWindow>>;
     async fn get_focused_workspace(&self) -> anyhow::Result<Option<AerospaceWorkspace>>;
@@ -62,12 +61,6 @@ impl AerospaceClient for RealClient {
         let output = run_command(&["list-windows", "--all", "--json"]).await?;
         let windows: Vec<AerospaceWindow> = serde_json::from_str(&output)?;
         Ok(windows)
-    }
-
-    async fn list_workspaces(&self) -> anyhow::Result<Vec<AerospaceWorkspace>> {
-        let output = run_command(&["list-workspaces", "--all", "--json"]).await?;
-        let workspaces: Vec<AerospaceWorkspace> = serde_json::from_str(&output)?;
-        Ok(workspaces)
     }
 
     async fn get_focused_monitor(&self) -> anyhow::Result<Option<AerospaceMonitor>> {
