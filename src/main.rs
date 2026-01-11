@@ -22,15 +22,15 @@ struct Args {
 #[argh(subcommand)]
 enum SubCommand {
     Server(ServerCommand),
-    Switch(SwitchCommand),
-    Toggle(ToggleCommand),
-    Move(MoveCommand),
+    TagView(TagViewCommand),
+    TagToggle(TagToggleCommand),
+    TagLast(TagLastCommand),
+    WindowMove(WindowMoveCommand),
+    WindowToggle(WindowToggleCommand),
+    WindowMoveMonitor(WindowMoveMonitorCommand),
+    WindowSet(WindowSetCommand),
     Hook(HookCommand),
-    Last(LastCommand),
-    MoveMonitor(MoveMonitorCommand),
     Subscribe(SubscribeCommand),
-    Set(SetCommand),
-    Copy(CopyCommand),
 }
 
 #[derive(Debug, FromArgs)]
@@ -40,42 +40,55 @@ struct ServerCommand {}
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
 /// Switch to a specific tag on the focused monitor
-#[argh(subcommand, name = "switch")]
-struct SwitchCommand {
+#[argh(subcommand, name = "tag-view")]
+struct TagViewCommand {
     #[argh(positional)]
     tag: u8,
 }
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
 /// Toggle a specific tag on the focused monitor
-#[argh(subcommand, name = "toggle")]
-struct ToggleCommand {
+#[argh(subcommand, name = "tag-toggle")]
+struct TagToggleCommand {
     #[argh(positional)]
     tag: u8,
 }
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
+/// Restore the last selected tags on the focused monitor
+#[argh(subcommand, name = "tag-last")]
+struct TagLastCommand {}
+
+#[derive(Debug, FromArgs, Serialize, Deserialize)]
 /// Move focused window to a specific tag
-#[argh(subcommand, name = "move")]
-struct MoveCommand {
+#[argh(subcommand, name = "window-move")]
+struct WindowMoveCommand {
     #[argh(positional)]
     tag: u8,
+}
+
+#[derive(Debug, FromArgs, Serialize, Deserialize)]
+/// Toggle focused window to a specific tag
+#[argh(subcommand, name = "window-toggle")]
+struct WindowToggleCommand {
+    #[argh(positional)]
+    tag: u8,
+}
+
+#[derive(Debug, FromArgs, Serialize, Deserialize)]
+/// Move focused window to next/prev monitor
+#[argh(subcommand, name = "window-move-monitor")]
+struct WindowMoveMonitorCommand {
+    #[argh(positional)]
+    target: String,
 }
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
 /// Set focused window tags to a specific bitmask
-#[argh(subcommand, name = "set")]
-struct SetCommand {
+#[argh(subcommand, name = "window-set")]
+struct WindowSetCommand {
     #[argh(positional)]
     mask: u32,
-}
-
-#[derive(Debug, FromArgs, Serialize, Deserialize)]
-/// Copy focused window to a specific tag
-#[argh(subcommand, name = "copy")]
-struct CopyCommand {
-    #[argh(positional)]
-    tag: u8,
 }
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
@@ -84,33 +97,20 @@ struct CopyCommand {
 struct HookCommand {}
 
 #[derive(Debug, FromArgs, Serialize, Deserialize)]
-/// Restore the last selected tags on the focused monitor
-#[argh(subcommand, name = "last")]
-struct LastCommand {}
-
-#[derive(Debug, FromArgs, Serialize, Deserialize)]
-/// Move focused window to next/prev monitor
-#[argh(subcommand, name = "move-monitor")]
-struct MoveMonitorCommand {
-    #[argh(positional)]
-    target: String,
-}
-
-#[derive(Debug, FromArgs, Serialize, Deserialize)]
 /// Subscribe to state change events
 #[argh(subcommand, name = "subscribe")]
 struct SubscribeCommand {}
 
 #[derive(Debug, Serialize, Deserialize)]
 enum IpcCommand {
-    Switch(u8),
-    Toggle(u8),
-    Move(u8),
-    Set(u32),
-    Copy(u8),
+    TagView(u8),
+    TagToggle(u8),
+    TagLast,
+    WindowMove(u8),
+    WindowToggle(u8),
+    WindowMoveMonitor(String),
+    WindowSet(u32),
     Sync,
-    Last,
-    MoveMonitor(String),
     Subscribe,
 }
 
@@ -124,13 +124,13 @@ struct StateEvent {
 
 // Internal commands for actor model
 enum InternalCommand {
-    HandleSwitch(Option<AerospaceMonitor>, u8),
-    HandleToggle(Option<AerospaceMonitor>, u8),
-    HandleLast(Option<AerospaceMonitor>),
-    HandleMove(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
-    HandleSet(Option<AerospaceWindow>, Option<AerospaceMonitor>, u32),
-    HandleCopy(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
-    HandleMoveMonitor(Option<AerospaceWindow>, Option<AerospaceMonitor>, String),
+    HandleTagView(Option<AerospaceMonitor>, u8),
+    HandleTagToggle(Option<AerospaceMonitor>, u8),
+    HandleTagLast(Option<AerospaceMonitor>),
+    HandleWindowMove(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
+    HandleWindowToggle(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
+    HandleWindowMoveMonitor(Option<AerospaceWindow>, Option<AerospaceMonitor>, String),
+    HandleWindowSet(Option<AerospaceWindow>, Option<AerospaceMonitor>, u32),
     HandleSync(
         anyhow::Result<Vec<AerospaceWindow>>,
         anyhow::Result<Vec<AerospaceMonitor>>,
@@ -161,36 +161,36 @@ async fn main() -> anyhow::Result<()> {
 
     match args.cmd {
         SubCommand::Server(_) => run_server().await,
-        SubCommand::Switch(cmd) => {
+        SubCommand::TagView(cmd) => {
             if cmd.tag == 0 {
                 anyhow::bail!("Tag index must be 1-based");
             }
-            send_client_command(IpcCommand::Switch(cmd.tag - 1)).await
+            send_client_command(IpcCommand::TagView(cmd.tag - 1)).await
         }
-        SubCommand::Toggle(cmd) => {
+        SubCommand::TagToggle(cmd) => {
             if cmd.tag == 0 {
                 anyhow::bail!("Tag index must be 1-based");
             }
-            send_client_command(IpcCommand::Toggle(cmd.tag - 1)).await
+            send_client_command(IpcCommand::TagToggle(cmd.tag - 1)).await
         }
-        SubCommand::Move(cmd) => {
+        SubCommand::TagLast(_) => send_client_command(IpcCommand::TagLast).await,
+        SubCommand::WindowMove(cmd) => {
             if cmd.tag == 0 {
                 anyhow::bail!("Tag index must be 1-based");
             }
-            send_client_command(IpcCommand::Move(cmd.tag - 1)).await
+            send_client_command(IpcCommand::WindowMove(cmd.tag - 1)).await
         }
-        SubCommand::Set(cmd) => send_client_command(IpcCommand::Set(cmd.mask)).await,
-        SubCommand::Copy(cmd) => {
+        SubCommand::WindowToggle(cmd) => {
             if cmd.tag == 0 {
                 anyhow::bail!("Tag index must be 1-based");
             }
-            send_client_command(IpcCommand::Copy(cmd.tag - 1)).await
+            send_client_command(IpcCommand::WindowToggle(cmd.tag - 1)).await
         }
+        SubCommand::WindowMoveMonitor(cmd) => {
+            send_client_command(IpcCommand::WindowMoveMonitor(cmd.target)).await
+        }
+        SubCommand::WindowSet(cmd) => send_client_command(IpcCommand::WindowSet(cmd.mask)).await,
         SubCommand::Hook(_) => send_client_command(IpcCommand::Sync).await,
-        SubCommand::Last(_) => send_client_command(IpcCommand::Last).await,
-        SubCommand::MoveMonitor(cmd) => {
-            send_client_command(IpcCommand::MoveMonitor(cmd.target)).await
-        }
         SubCommand::Subscribe(_) => run_subscriber().await,
     }
 }
@@ -370,62 +370,62 @@ fn broadcast_state_change(
 fn handle_ipc_command_async(cmd: IpcCommand, tx: mpsc::Sender<ManagerMessage>) {
     tokio::spawn(async move {
         match cmd {
-            IpcCommand::Switch(tag) => {
+            IpcCommand::TagView(tag) => {
                 let m = aerospace::get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleSwitch(
+                    .send(ManagerMessage::Internal(InternalCommand::HandleTagView(
                         m, tag,
                     )))
                     .await;
             }
-            IpcCommand::Toggle(tag) => {
+            IpcCommand::TagToggle(tag) => {
                 let m = aerospace::get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleToggle(
+                    .send(ManagerMessage::Internal(InternalCommand::HandleTagToggle(
                         m, tag,
                     )))
                     .await;
             }
-            IpcCommand::Last => {
+            IpcCommand::TagLast => {
                 let m = aerospace::get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleLast(m)))
+                    .send(ManagerMessage::Internal(InternalCommand::HandleTagLast(m)))
                     .await;
             }
-            IpcCommand::Move(tag) => {
+            IpcCommand::WindowMove(tag) => {
                 let w = aerospace::get_focused_window().await.ok().flatten();
                 let m = aerospace::get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleMove(
+                    .send(ManagerMessage::Internal(InternalCommand::HandleWindowMove(
                         w, m, tag,
                     )))
                     .await;
             }
-            IpcCommand::Set(mask) => {
+            IpcCommand::WindowToggle(tag) => {
                 let w = aerospace::get_focused_window().await.ok().flatten();
                 let m = aerospace::get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleSet(
-                        w, m, mask,
-                    )))
-                    .await;
-            }
-            IpcCommand::Copy(tag) => {
-                let w = aerospace::get_focused_window().await.ok().flatten();
-                let m = aerospace::get_focused_monitor().await.ok().flatten();
-                let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleCopy(
+                    .send(ManagerMessage::Internal(InternalCommand::HandleWindowToggle(
                         w, m, tag,
                     )))
                     .await;
             }
-            IpcCommand::MoveMonitor(target) => {
+            IpcCommand::WindowMoveMonitor(target) => {
                 let w = aerospace::get_focused_window().await.ok().flatten();
                 let m = aerospace::get_focused_monitor().await.ok().flatten();
                 let _ = tx
                     .send(ManagerMessage::Internal(
-                        InternalCommand::HandleMoveMonitor(w, m, target),
+                        InternalCommand::HandleWindowMoveMonitor(w, m, target),
                     ))
+                    .await;
+            }
+            IpcCommand::WindowSet(mask) => {
+                let w = aerospace::get_focused_window().await.ok().flatten();
+                let m = aerospace::get_focused_monitor().await.ok().flatten();
+                let _ = tx
+                    .send(ManagerMessage::Internal(InternalCommand::HandleWindowSet(
+                        w, m, mask,
+                    )))
                     .await;
             }
             IpcCommand::Sync => {
@@ -467,7 +467,7 @@ fn handle_internal_command(
     event_tx: &tokio::sync::broadcast::Sender<StateEvent>,
 ) {
     match cmd {
-        InternalCommand::HandleSwitch(Some(m), tag) => {
+        InternalCommand::HandleTagView(Some(m), tag) => {
             tracing::info!("Switching to tag {}", tag);
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
@@ -490,9 +490,9 @@ fn handle_internal_command(
                 tracing::warn!("Monitor {} not found in state", m.monitor_id);
             }
         }
-        InternalCommand::HandleSwitch(None, _) => tracing::warn!("No focused monitor found"),
+        InternalCommand::HandleTagView(None, _) => tracing::warn!("No focused monitor found"),
 
-        InternalCommand::HandleToggle(Some(m), tag) => {
+        InternalCommand::HandleTagToggle(Some(m), tag) => {
             tracing::info!("Toggling tag {}", tag);
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
@@ -513,9 +513,9 @@ fn handle_internal_command(
                 });
             }
         }
-        InternalCommand::HandleToggle(None, _) => tracing::warn!("No focused monitor found"),
+        InternalCommand::HandleTagToggle(None, _) => tracing::warn!("No focused monitor found"),
 
-        InternalCommand::HandleLast(Some(m)) => {
+        InternalCommand::HandleTagLast(Some(m)) => {
             tracing::info!("Restoring last tags");
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
@@ -536,9 +536,9 @@ fn handle_internal_command(
                 });
             }
         }
-        InternalCommand::HandleLast(None) => tracing::warn!("No focused monitor found"),
+        InternalCommand::HandleTagLast(None) => tracing::warn!("No focused monitor found"),
 
-        InternalCommand::HandleMove(Some(w), focused_monitor, tag) => {
+        InternalCommand::HandleWindowMove(Some(w), focused_monitor, tag) => {
             tracing::info!("Moving window to tag {}", tag);
             let mut target_monitor_id = None;
 
@@ -593,9 +593,9 @@ fn handle_internal_command(
                 tracing::warn!("No monitor found for window move");
             }
         }
-        InternalCommand::HandleMove(None, _, _) => tracing::warn!("No focused window found"),
+        InternalCommand::HandleWindowMove(None, _, _) => tracing::warn!("No focused window found"),
 
-        InternalCommand::HandleSet(Some(w), focused_monitor, mask) => {
+        InternalCommand::HandleWindowSet(Some(w), focused_monitor, mask) => {
             tracing::info!("Setting window tags to mask {:b}", mask);
             let mut target_monitor_id = None;
 
@@ -654,10 +654,10 @@ fn handle_internal_command(
                 tracing::warn!("No monitor found for window set");
             }
         }
-        InternalCommand::HandleSet(None, _, _) => tracing::warn!("No focused window found"),
+        InternalCommand::HandleWindowSet(None, _, _) => tracing::warn!("No focused window found"),
 
-        InternalCommand::HandleCopy(Some(w), focused_monitor, tag) => {
-            tracing::info!("Adding window to tag {}", tag);
+        InternalCommand::HandleWindowToggle(Some(w), focused_monitor, tag) => {
+            tracing::info!("Toggling window tag {}", tag);
             let mut target_monitor_id = None;
 
             if let Some(mid) = state.find_monitor_by_window(w.window_id) {
@@ -669,16 +669,45 @@ fn handle_internal_command(
             if let Some(mid) = target_monitor_id {
                 let mut sync_data = None;
                 if let Some(monitor) = state.get_monitor_mut(mid) {
-                    if (tag as usize) < monitor.tags.len() {
-                        if !monitor.tags[tag as usize].window_ids.contains(&w.window_id) {
-                            monitor.tags[tag as usize].window_ids.push(w.window_id);
+                    let tag_idx = tag as usize;
+                    if tag_idx < monitor.tags.len() {
+                        let already_in_tag =
+                            monitor.tags[tag_idx].window_ids.contains(&w.window_id);
+
+                        let mut change_needed = false;
+                        if !already_in_tag {
+                            // Add
+                            monitor.tags[tag_idx].window_ids.push(w.window_id);
+                            change_needed = true;
+                        } else {
+                            // Try to remove, but check safety first
+                            let mut tag_count = 0;
+                            for t in &monitor.tags {
+                                if t.window_ids.contains(&w.window_id) {
+                                    tag_count += 1;
+                                }
+                            }
+
+                            if tag_count > 1 {
+                                // Safe to remove
+                                monitor.tags[tag_idx].window_ids.retain(|&id| id != w.window_id);
+                                change_needed = true;
+                            } else {
+                                tracing::warn!(
+                                    "Cannot remove last tag from window {}",
+                                    w.window_id
+                                );
+                            }
+                        }
+
+                        if change_needed {
+                            sync_data = Some((
+                                monitor.tags.clone(),
+                                monitor.selected_tags,
+                                monitor.visible_workspace.clone(),
+                            ));
                         }
                     }
-                    sync_data = Some((
-                        monitor.tags.clone(),
-                        monitor.selected_tags,
-                        monitor.visible_workspace.clone(),
-                    ));
                 }
 
                 if let Some((tags, selected_tags, visible_workspace)) = sync_data {
@@ -705,12 +734,12 @@ fn handle_internal_command(
                     });
                 }
             } else {
-                tracing::warn!("No monitor found for window copy");
+                tracing::warn!("No monitor found for window toggle");
             }
         }
-        InternalCommand::HandleCopy(None, _, _) => tracing::warn!("No focused window found"),
+        InternalCommand::HandleWindowToggle(None, _, _) => tracing::warn!("No focused window found"),
 
-        InternalCommand::HandleMoveMonitor(Some(w), Some(current_monitor), target) => {
+        InternalCommand::HandleWindowMoveMonitor(Some(w), Some(current_monitor), target) => {
             tracing::info!("Moving window to monitor {}", target);
             let mut monitor_ids: Vec<u32> = state.monitors.keys().cloned().collect();
             monitor_ids.sort();
@@ -764,8 +793,8 @@ fn handle_internal_command(
                 }
             }
         }
-        InternalCommand::HandleMoveMonitor(None, _, _) => tracing::warn!("No focused window found"),
-        InternalCommand::HandleMoveMonitor(_, None, _) => {
+        InternalCommand::HandleWindowMoveMonitor(None, _, _) => tracing::warn!("No focused window found"),
+        InternalCommand::HandleWindowMoveMonitor(_, None, _) => {
             tracing::warn!("No focused monitor found")
         }
 
