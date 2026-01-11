@@ -9,7 +9,9 @@ use tokio::sync::mpsc;
 mod aerospace;
 mod state;
 
-use aerospace::{AerospaceClient, AerospaceMonitor, AerospaceWindow, AerospaceWorkspace, RealClient};
+use aerospace::{
+    AerospaceClient, AerospaceMonitor, AerospaceWindow, AerospaceWorkspace, RealClient,
+};
 use state::{Monitor, State};
 
 #[derive(Debug, FromArgs)]
@@ -823,11 +825,14 @@ fn handle_internal_command(
                     broadcast_state_change(state, mid, event_tx);
                     let hidden_workspace = state.hidden_workspace.clone();
 
-                    state.windows.entry(w.window_id).or_insert(state::WindowInfo {
-                        id: w.window_id,
-                        app_name: w.app_name,
-                        title: w.window_title,
-                    });
+                    state
+                        .windows
+                        .entry(w.window_id)
+                        .or_insert(state::WindowInfo {
+                            id: w.window_id,
+                            app_name: w.app_name,
+                            title: w.window_title,
+                        });
 
                     let client = client.clone();
                     tokio::spawn(async move {
@@ -905,11 +910,14 @@ fn handle_internal_command(
                     // Update window info if available
                     if let Some(ref w) = focused_window {
                         if w.window_id == wid {
-                            state.windows.entry(w.window_id).or_insert(state::WindowInfo {
-                                id: w.window_id,
-                                app_name: w.app_name.clone(),
-                                title: w.window_title.clone(),
-                            });
+                            state
+                                .windows
+                                .entry(w.window_id)
+                                .or_insert(state::WindowInfo {
+                                    id: w.window_id,
+                                    app_name: w.app_name.clone(),
+                                    title: w.window_title.clone(),
+                                });
                         }
                     }
 
@@ -990,11 +998,14 @@ fn handle_internal_command(
                     broadcast_state_change(state, mid, event_tx);
                     let hidden_workspace = state.hidden_workspace.clone();
 
-                    state.windows.entry(w.window_id).or_insert(state::WindowInfo {
-                        id: w.window_id,
-                        app_name: w.app_name,
-                        title: w.window_title,
-                    });
+                    state
+                        .windows
+                        .entry(w.window_id)
+                        .or_insert(state::WindowInfo {
+                            id: w.window_id,
+                            app_name: w.app_name,
+                            title: w.window_title,
+                        });
 
                     let client = client.clone();
                     tokio::spawn(async move {
@@ -1527,10 +1538,7 @@ async fn sync_monitor_state(
         if (selected_tags & (1 << i)) == 0 {
             for &window_id in &tag.window_ids {
                 let hidden_ws = format!("h-{}", window_id);
-                if let Err(e) = client
-                    .move_node_to_workspace(window_id, &hidden_ws)
-                    .await
-                {
+                if let Err(e) = client.move_node_to_workspace(window_id, &hidden_ws).await {
                     tracing::error!("Failed to hide window {}: {}", window_id, e);
                 }
             }
@@ -1561,10 +1569,7 @@ async fn sync_monitor_state(
     }
 }
 
-async fn initialize_all_monitors(
-    client: &Arc<dyn AerospaceClient>,
-    monitors: &[AerospaceMonitor],
-) {
+async fn initialize_all_monitors(client: &Arc<dyn AerospaceClient>, monitors: &[AerospaceMonitor]) {
     if monitors.is_empty() {
         return;
     }
@@ -1627,7 +1632,9 @@ async fn initialize_all_monitors(
     if let Some(primary) = sorted.first() {
         tracing::info!("Focusing primary monitor {}", primary.monitor_id);
         let _ = client.focus_monitor(primary.monitor_id).await;
-        let _ = client.focus_workspace(&primary.monitor_id.to_string()).await;
+        let _ = client
+            .focus_workspace(&primary.monitor_id.to_string())
+            .await;
     }
 
     tracing::info!("Workspace realignment complete");
@@ -1708,7 +1715,10 @@ mod tests {
 
         let m = state.monitors.get(&1).unwrap();
         assert!(m.tags[0].window_ids.contains(&100));
-        assert!(m.tags[1].window_ids.contains(&100), "Window should be added to Tag 1");
+        assert!(
+            m.tags[1].window_ids.contains(&100),
+            "Window should be added to Tag 1"
+        );
     }
 
     #[tokio::test]
@@ -1737,8 +1747,14 @@ mod tests {
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
         let m = state.monitors.get(&1).unwrap();
-        assert!(!m.tags[0].window_ids.contains(&100), "Should be removed from Tag 0");
-        assert!(m.tags[2].window_ids.contains(&100), "Should be added to Tag 2");
+        assert!(
+            !m.tags[0].window_ids.contains(&100),
+            "Should be removed from Tag 0"
+        );
+        assert!(
+            m.tags[2].window_ids.contains(&100),
+            "Should be added to Tag 2"
+        );
     }
 
     #[tokio::test]
@@ -1805,7 +1821,7 @@ mod tests {
         // It's `handle_query_client_async` that calls client.
         // `handle_internal_command` receives the result.
         // So we don't need to mock client calls here if we pass the data manually to InternalCommand!
-        
+
         let client: Arc<dyn AerospaceClient> = Arc::new(mock);
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
@@ -1815,18 +1831,13 @@ mod tests {
         // stream_tx is a Stream.
         // InternalCommand expects OwnedWriteHalf.
         // stream_tx.into_split() gives (OwnedReadHalf, OwnedWriteHalf).
-        
+
         let focused_monitor = Some(AerospaceMonitor {
             monitor_id: 1,
             monitor_name: "Main".into(),
         });
 
-        let cmd = InternalCommand::HandleQuery(
-            None,
-            focused_monitor,
-            QueryTarget::State,
-            tx_write,
-        );
+        let cmd = InternalCommand::HandleQuery(None, focused_monitor, QueryTarget::State, tx_write);
 
         handle_internal_command(&mut state, cmd, &event_tx, client);
 

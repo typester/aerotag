@@ -41,7 +41,11 @@ pub trait AerospaceClient: Send + Sync {
     async fn focus_workspace(&self, workspace: &str) -> anyhow::Result<()>;
     async fn focus_window(&self, window_id: u32) -> anyhow::Result<()>;
     async fn focus_monitor(&self, monitor_id: u32) -> anyhow::Result<()>;
-    async fn move_workspace_to_monitor(&self, workspace: &str, monitor_id: u32) -> anyhow::Result<()>;
+    async fn move_workspace_to_monitor(
+        &self,
+        workspace: &str,
+        monitor_id: u32,
+    ) -> anyhow::Result<()>;
 }
 
 pub struct RealClient;
@@ -127,7 +131,11 @@ impl AerospaceClient for RealClient {
         Ok(())
     }
 
-    async fn move_workspace_to_monitor(&self, workspace: &str, monitor_id: u32) -> anyhow::Result<()> {
+    async fn move_workspace_to_monitor(
+        &self,
+        workspace: &str,
+        monitor_id: u32,
+    ) -> anyhow::Result<()> {
         run_command(&[
             "move-workspace-to-monitor",
             "--workspace",
