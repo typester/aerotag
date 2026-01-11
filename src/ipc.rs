@@ -33,26 +33,26 @@ pub struct StateEvent {
 
 // Internal commands for actor model
 pub enum InternalCommand {
-    HandleTagView(Option<AerospaceMonitor>, u8),
-    HandleTagToggle(Option<AerospaceMonitor>, u8),
-    HandleTagLast(Option<AerospaceMonitor>),
-    HandleTagSet(Option<AerospaceMonitor>, u32, Option<u32>),
-    HandleWindowMove(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
-    HandleWindowToggle(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
-    HandleWindowMoveMonitor(Option<AerospaceWindow>, Option<AerospaceMonitor>, String),
-    HandleWindowSet(
+    TagView(Option<AerospaceMonitor>, u8),
+    TagToggle(Option<AerospaceMonitor>, u8),
+    TagLast(Option<AerospaceMonitor>),
+    TagSet(Option<AerospaceMonitor>, u32, Option<u32>),
+    WindowMove(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
+    WindowToggle(Option<AerospaceWindow>, Option<AerospaceMonitor>, u8),
+    WindowMoveMonitor(Option<AerospaceWindow>, Option<AerospaceMonitor>, String),
+    WindowSet(
         Option<AerospaceWindow>,
         Option<AerospaceMonitor>,
         u32,
         Option<u32>,
     ),
-    HandleQuery(
+    Query(
         Option<AerospaceWindow>,
         Option<AerospaceMonitor>,
         QueryTarget,
         tokio::net::unix::OwnedWriteHalf,
     ),
-    HandleSync(
+    Sync(
         anyhow::Result<Vec<AerospaceWindow>>,
         anyhow::Result<Vec<AerospaceMonitor>>,
         std::collections::HashMap<u32, String>,
@@ -66,5 +66,5 @@ pub enum ManagerMessage {
     Ipc(IpcCommand),
     SubscribeClient(tokio::net::unix::OwnedWriteHalf),
     QueryClient(QueryTarget, tokio::net::unix::OwnedWriteHalf),
-    Internal(InternalCommand),
+    Internal(Box<InternalCommand>),
 }

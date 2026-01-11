@@ -60,9 +60,7 @@ impl Monitor {
     }
 
     pub fn restore_last_tags(&mut self) {
-        let temp = self.selected_tags;
-        self.selected_tags = self.previous_tags;
-        self.previous_tags = temp;
+        std::mem::swap(&mut self.selected_tags, &mut self.previous_tags);
     }
 }
 
@@ -90,10 +88,10 @@ impl State {
     }
 
     pub fn assign_window(&mut self, window_id: WindowId, tag_idx: u8, monitor_id: MonitorId) {
-        if let Some(monitor) = self.monitors.get_mut(&monitor_id) {
-            if (tag_idx as usize) < monitor.tags.len() {
-                monitor.tags[tag_idx as usize].window_ids.push(window_id);
-            }
+        if let Some(monitor) = self.monitors.get_mut(&monitor_id)
+            && (tag_idx as usize) < monitor.tags.len()
+        {
+            monitor.tags[tag_idx as usize].window_ids.push(window_id);
         }
     }
 

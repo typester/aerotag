@@ -48,7 +48,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                     handle_ipc_command_async(cmd, actor_tx.clone(), client.clone());
                 }
                 ManagerMessage::Internal(cmd) => {
-                    handle_internal_command(&mut state, cmd, &event_tx_clone, client.clone());
+                    handle_internal_command(&mut state, *cmd, &event_tx_clone, client.clone());
                 }
                 ManagerMessage::QueryClient(target, stream_tx) => {
                     handle_query_client_async(target, stream_tx, actor_tx.clone(), client.clone());
@@ -115,14 +115,13 @@ fn handle_subscribe_client(
 
         // Stream future events
         while let Ok(event) = event_rx.recv().await {
-            if let Ok(json) = serde_json::to_string(&event) {
-                if stream_tx
+            if let Ok(json) = serde_json::to_string(&event)
+                && stream_tx
                     .write_all(format!("{}\n", json).as_bytes())
                     .await
                     .is_err()
-                {
-                    break; // Client disconnected
-                }
+            {
+                break; // Client disconnected
             }
         }
     });
@@ -133,20 +132,20 @@ fn handle_connection(stream: tokio::net::UnixStream, tx: mpsc::Sender<ManagerMes
         let (mut stream_rx, stream_tx) = stream.into_split();
         let mut buf = Vec::new();
         // Read command
-        if let Ok(_) = stream_rx.read_to_end(&mut buf).await {
-            if let Ok(cmd) = serde_json::from_slice::<IpcCommand>(&buf) {
-                match cmd {
-                    IpcCommand::Subscribe => {
-                        let _ = tx.send(ManagerMessage::SubscribeClient(stream_tx)).await;
-                    }
-                    IpcCommand::Query(target) => {
-                        let _ = tx
-                            .send(ManagerMessage::QueryClient(target, stream_tx))
-                            .await;
-                    }
-                    _ => {
-                        let _ = tx.send(ManagerMessage::Ipc(cmd)).await;
-                    }
+        if stream_rx.read_to_end(&mut buf).await.is_ok()
+            && let Ok(cmd) = serde_json::from_slice::<IpcCommand>(&buf)
+        {
+            match cmd {
+                IpcCommand::Subscribe => {
+                    let _ = tx.send(ManagerMessage::SubscribeClient(stream_tx)).await;
+                }
+                IpcCommand::Query(target) => {
+                    let _ = tx
+                        .send(ManagerMessage::QueryClient(target, stream_tx))
+                        .await;
+                }
+                _ => {
+                    let _ = tx.send(ManagerMessage::Ipc(cmd)).await;
                 }
             }
         }
@@ -190,12 +189,10 @@ fn handle_query_client_async(
         let mut fw: Option<AerospaceWindow> = None;
         let mut fm: Option<AerospaceMonitor> = None;
 
-        let needs_focus_info = match &target {
-            QueryTarget::Window(None) => true,
-            QueryTarget::Monitor(None) => true,
-            QueryTarget::State => true,
-            _ => false,
-        };
+        let needs_focus_info = matches!(
+            &target,
+            QueryTarget::Window(None) | QueryTarget::Monitor(None) | QueryTarget::State
+        );
 
         if needs_focus_info {
             fw = client.get_focused_window().await.ok().flatten();
@@ -203,9 +200,9 @@ fn handle_query_client_async(
         }
 
         let _ = tx
-            .send(ManagerMessage::Internal(InternalCommand::HandleQuery(
+            .send(ManagerMessage::Internal(Box::new(InternalCommand::Query(
                 fw, fm, target, stream_tx,
-            )))
+            ))))
             .await;
     });
 }
@@ -221,23 +218,25 @@ fn handle_ipc_command_async(
             IpcCommand::TagView(tag) => {
                 let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleTagView(
-                        m, tag,
+                    .send(ManagerMessage::Internal(Box::new(
+                        InternalCommand::TagView(m, tag),
                     )))
                     .await;
             }
             IpcCommand::TagToggle(tag) => {
                 let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleTagToggle(
-                        m, tag,
+                    .send(ManagerMessage::Internal(Box::new(
+                        InternalCommand::TagToggle(m, tag),
                     )))
                     .await;
             }
             IpcCommand::TagLast => {
                 let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleTagLast(m)))
+                    .send(ManagerMessage::Internal(Box::new(
+                        InternalCommand::TagLast(m),
+                    )))
                     .await;
             }
             IpcCommand::TagSet(mask, monitor_id) => {
@@ -247,17 +246,17 @@ fn handle_ipc_command_async(
                     None
                 };
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleTagSet(
+                    .send(ManagerMessage::Internal(Box::new(InternalCommand::TagSet(
                         m, mask, monitor_id,
-                    )))
+                    ))))
                     .await;
             }
             IpcCommand::WindowMove(tag) => {
                 let w = client.get_focused_window().await.ok().flatten();
                 let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleWindowMove(
-                        w, m, tag,
+                    .send(ManagerMessage::Internal(Box::new(
+                        InternalCommand::WindowMove(w, m, tag),
                     )))
                     .await;
             }
@@ -271,8 +270,8 @@ fn handle_ipc_command_async(
                     (None, None)
                 };
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleWindowSet(
-                        w, m, mask, window_id,
+                    .send(ManagerMessage::Internal(Box::new(
+                        InternalCommand::WindowSet(w, m, mask, window_id),
                     )))
                     .await;
             }
@@ -280,18 +279,18 @@ fn handle_ipc_command_async(
                 let w = client.get_focused_window().await.ok().flatten();
                 let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(
-                        InternalCommand::HandleWindowToggle(w, m, tag),
-                    ))
+                    .send(ManagerMessage::Internal(Box::new(
+                        InternalCommand::WindowToggle(w, m, tag),
+                    )))
                     .await;
             }
             IpcCommand::WindowMoveMonitor(target) => {
                 let w = client.get_focused_window().await.ok().flatten();
                 let m = client.get_focused_monitor().await.ok().flatten();
                 let _ = tx
-                    .send(ManagerMessage::Internal(
-                        InternalCommand::HandleWindowMoveMonitor(w, m, target),
-                    ))
+                    .send(ManagerMessage::Internal(Box::new(
+                        InternalCommand::WindowMoveMonitor(w, m, target),
+                    )))
                     .await;
             }
             IpcCommand::Sync => {
@@ -313,14 +312,14 @@ fn handle_ipc_command_async(
                 let fw_monitor = client.get_focused_monitor().await;
 
                 let _ = tx
-                    .send(ManagerMessage::Internal(InternalCommand::HandleSync(
+                    .send(ManagerMessage::Internal(Box::new(InternalCommand::Sync(
                         windows,
                         monitors_result,
                         visible_workspaces,
                         fw_workspace,
                         fw_window,
                         fw_monitor,
-                    )))
+                    ))))
                     .await;
             }
             IpcCommand::Subscribe => {} // Already handled
@@ -336,7 +335,7 @@ fn handle_internal_command(
     client: Arc<dyn AerospaceClient>,
 ) {
     match cmd {
-        InternalCommand::HandleTagView(Some(m), tag) => {
+        InternalCommand::TagView(Some(m), tag) => {
             tracing::info!("Switching to tag {}", tag);
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
@@ -366,9 +365,9 @@ fn handle_internal_command(
                 tracing::warn!("Monitor {} not found in state", m.monitor_id);
             }
         }
-        InternalCommand::HandleTagView(None, _) => tracing::warn!("No focused monitor found"),
+        InternalCommand::TagView(None, _) => tracing::warn!("No focused monitor found"),
 
-        InternalCommand::HandleTagToggle(Some(m), tag) => {
+        InternalCommand::TagToggle(Some(m), tag) => {
             tracing::info!("Toggling tag {}", tag);
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
@@ -396,9 +395,9 @@ fn handle_internal_command(
                 });
             }
         }
-        InternalCommand::HandleTagToggle(None, _) => tracing::warn!("No focused monitor found"),
+        InternalCommand::TagToggle(None, _) => tracing::warn!("No focused monitor found"),
 
-        InternalCommand::HandleTagLast(Some(m)) => {
+        InternalCommand::TagLast(Some(m)) => {
             tracing::info!("Restoring last tags");
             let mut sync_data = None;
             if let Some(monitor) = state.get_monitor_mut(m.monitor_id) {
@@ -426,9 +425,9 @@ fn handle_internal_command(
                 });
             }
         }
-        InternalCommand::HandleTagLast(None) => tracing::warn!("No focused monitor found"),
+        InternalCommand::TagLast(None) => tracing::warn!("No focused monitor found"),
 
-        InternalCommand::HandleTagSet(focused_monitor, mask, monitor_id_opt) => {
+        InternalCommand::TagSet(focused_monitor, mask, monitor_id_opt) => {
             tracing::info!("Setting tag mask to {:b}", mask);
             let mut target_monitor_id = None;
             if let Some(id) = monitor_id_opt {
@@ -469,7 +468,7 @@ fn handle_internal_command(
             }
         }
 
-        InternalCommand::HandleWindowMove(Some(w), focused_monitor, tag) => {
+        InternalCommand::WindowMove(Some(w), focused_monitor, tag) => {
             tracing::info!("Moving window to tag {}", tag);
             let mut target_monitor_id = None;
 
@@ -523,9 +522,9 @@ fn handle_internal_command(
                 tracing::warn!("No monitor found for window move");
             }
         }
-        InternalCommand::HandleWindowMove(None, _, _) => tracing::warn!("No focused window found"),
+        InternalCommand::WindowMove(None, _, _) => tracing::warn!("No focused window found"),
 
-        InternalCommand::HandleWindowSet(focused_window, focused_monitor, mask, window_id_opt) => {
+        InternalCommand::WindowSet(focused_window, focused_monitor, mask, window_id_opt) => {
             tracing::info!("Setting window tags to mask {:b}", mask);
 
             let mut target_window_id = None;
@@ -536,14 +535,8 @@ fn handle_internal_command(
                 // Find monitor for this window
                 if let Some(mid) = state.find_monitor_by_window(wid) {
                     target_monitor_id = Some(mid);
-                } else {
-                    // If not found in tags, maybe use focused monitor or search?
-                    // For now, if we can't find the monitor, we can't update tags on a monitor.
-                    // But if it's a new window, maybe we assign it to focused monitor?
-                    // Let's stick to existing logic: find by window, else focused monitor.
-                    if let Some(m) = focused_monitor {
-                        target_monitor_id = Some(m.monitor_id);
-                    }
+                } else if let Some(m) = focused_monitor {
+                    target_monitor_id = Some(m.monitor_id);
                 }
             } else if let Some(ref w) = focused_window {
                 target_window_id = Some(w.window_id);
@@ -563,10 +556,8 @@ fn handle_internal_command(
                     }
                     // Add to tags specified by mask
                     for i in 0..32 {
-                        if (mask & (1 << i)) != 0 {
-                            if (i as usize) < monitor.tags.len() {
-                                monitor.tags[i as usize].window_ids.push(wid);
-                            }
+                        if (mask & (1 << i)) != 0 && (i as usize) < monitor.tags.len() {
+                            monitor.tags[i as usize].window_ids.push(wid);
                         }
                     }
                     sync_data = Some((
@@ -581,14 +572,14 @@ fn handle_internal_command(
                     let hidden_workspace = state.hidden_workspace.clone();
 
                     // Update window info if available
-                    if let Some(ref w) = focused_window {
-                        if w.window_id == wid {
-                            state.windows.entry(w.window_id).or_insert(WindowInfo {
-                                id: w.window_id,
-                                app_name: w.app_name.clone(),
-                                title: w.window_title.clone(),
-                            });
-                        }
+                    if let Some(ref w) = focused_window
+                        && w.window_id == wid
+                    {
+                        state.windows.entry(w.window_id).or_insert(WindowInfo {
+                            id: w.window_id,
+                            app_name: w.app_name.clone(),
+                            title: w.window_title.clone(),
+                        });
                     }
 
                     let client = client.clone();
@@ -608,7 +599,7 @@ fn handle_internal_command(
             }
         }
 
-        InternalCommand::HandleWindowToggle(Some(w), focused_monitor, tag) => {
+        InternalCommand::WindowToggle(Some(w), focused_monitor, tag) => {
             tracing::info!("Toggling window tag {}", tag);
             let mut target_monitor_id = None;
 
@@ -690,11 +681,11 @@ fn handle_internal_command(
                 tracing::warn!("No monitor found for window toggle");
             }
         }
-        InternalCommand::HandleWindowToggle(None, _, _) => {
+        InternalCommand::WindowToggle(None, _, _) => {
             tracing::warn!("No focused window found")
         }
 
-        InternalCommand::HandleWindowMoveMonitor(Some(w), Some(current_monitor), target) => {
+        InternalCommand::WindowMoveMonitor(Some(w), Some(current_monitor), target) => {
             tracing::info!("Moving window to monitor {}", target);
             let mut monitor_ids: Vec<u32> = state.monitors.keys().cloned().collect();
             monitor_ids.sort();
@@ -749,33 +740,33 @@ fn handle_internal_command(
                 }
             }
         }
-        InternalCommand::HandleWindowMoveMonitor(None, _, _) => {
+        InternalCommand::WindowMoveMonitor(None, _, _) => {
             tracing::warn!("No focused window found")
         }
-        InternalCommand::HandleWindowMoveMonitor(_, None, _) => {
+        InternalCommand::WindowMoveMonitor(_, None, _) => {
             tracing::warn!("No focused monitor found")
         }
 
-        InternalCommand::HandleQuery(focused_window, focused_monitor, target, mut stream_tx) => {
+        InternalCommand::Query(focused_window, focused_monitor, target, mut stream_tx) => {
             let response = match target {
                 QueryTarget::Window(opt_id) => {
                     let mut target_wid = opt_id;
-                    if target_wid.is_none() {
-                        if let Some(w) = &focused_window {
-                            target_wid = Some(w.window_id);
-                        }
+                    if target_wid.is_none()
+                        && let Some(w) = &focused_window
+                    {
+                        target_wid = Some(w.window_id);
                     }
 
                     if let Some(wid) = target_wid {
                         if let Some(w_info) = state.windows.get(&wid) {
                             let monitor_id = state.find_monitor_by_window(wid);
                             let mut tags = 0;
-                            if let Some(mid) = monitor_id {
-                                if let Some(m) = state.monitors.get(&mid) {
-                                    for (i, tag) in m.tags.iter().enumerate() {
-                                        if tag.window_ids.contains(&wid) {
-                                            tags |= 1 << i;
-                                        }
+                            if let Some(mid) = monitor_id
+                                && let Some(m) = state.monitors.get(&mid)
+                            {
+                                for (i, tag) in m.tags.iter().enumerate() {
+                                    if tag.window_ids.contains(&wid) {
+                                        tags |= 1 << i;
                                     }
                                 }
                             }
@@ -811,10 +802,10 @@ fn handle_internal_command(
                 }
                 QueryTarget::Monitor(opt_id) => {
                     let mut target_mid = opt_id;
-                    if target_mid.is_none() {
-                        if let Some(m) = &focused_monitor {
-                            target_mid = Some(m.monitor_id);
-                        }
+                    if target_mid.is_none()
+                        && let Some(m) = &focused_monitor
+                    {
+                        target_mid = Some(m.monitor_id);
                     }
 
                     if let Some(mid) = target_mid {
@@ -868,7 +859,7 @@ fn handle_internal_command(
             });
         }
 
-        InternalCommand::HandleSync(
+        InternalCommand::Sync(
             Ok(windows),
             Ok(monitors),
             visible_workspaces,
@@ -958,36 +949,36 @@ fn handle_internal_command(
                         }
                     }
 
-                    if !rescued_windows.is_empty() {
-                        if let Some(rescue_monitor) = state.get_monitor_mut(rescue_id) {
-                            let target_tag = rescue_monitor.selected_tags.trailing_zeros() as u8;
-                            for wid in rescued_windows {
-                                if (target_tag as usize) < rescue_monitor.tags.len() {
-                                    rescue_monitor.tags[target_tag as usize]
-                                        .window_ids
-                                        .push(wid);
-                                }
+                    if !rescued_windows.is_empty()
+                        && let Some(rescue_monitor) = state.get_monitor_mut(rescue_id)
+                    {
+                        let target_tag = rescue_monitor.selected_tags.trailing_zeros() as u8;
+                        for wid in rescued_windows {
+                            if (target_tag as usize) < rescue_monitor.tags.len() {
+                                rescue_monitor.tags[target_tag as usize]
+                                    .window_ids
+                                    .push(wid);
                             }
-                            changed_monitors.insert(rescue_id);
-
-                            // Schedule sync for rescue monitor
-                            let tags = rescue_monitor.tags.clone();
-                            let selected_tags = rescue_monitor.selected_tags;
-                            let visible_workspace = rescue_monitor.visible_workspace.clone();
-                            let hidden_workspace = state.hidden_workspace.clone();
-
-                            let client = client.clone();
-                            tokio::spawn(async move {
-                                sync_monitor_state(
-                                    &client,
-                                    &tags,
-                                    selected_tags,
-                                    &visible_workspace,
-                                    &hidden_workspace,
-                                )
-                                .await;
-                            });
                         }
+                        changed_monitors.insert(rescue_id);
+
+                        // Schedule sync for rescue monitor
+                        let tags = rescue_monitor.tags.clone();
+                        let selected_tags = rescue_monitor.selected_tags;
+                        let visible_workspace = rescue_monitor.visible_workspace.clone();
+                        let hidden_workspace = state.hidden_workspace.clone();
+
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            sync_monitor_state(
+                                &client,
+                                &tags,
+                                selected_tags,
+                                &visible_workspace,
+                                &hidden_workspace,
+                            )
+                            .await;
+                        });
                     }
                 } else {
                     tracing::error!("All monitors removed? Cannot rescue windows.");
@@ -1093,95 +1084,93 @@ fn handle_internal_command(
             }
 
             // 3. Rescue focus from hidden workspace
-            if let Ok(Some(ws)) = fw_workspace {
-                if ws.workspace.starts_with("h-") {
-                    tracing::info!("Detected focus on hidden workspace '{}'.", ws.workspace);
+            if let Ok(Some(ws)) = fw_workspace
+                && ws.workspace.starts_with("h-")
+            {
+                tracing::info!("Detected focus on hidden workspace '{}'.", ws.workspace);
 
-                    if let Ok(Some(fw)) = fw_window {
-                        let mut target_monitor_id = None;
-                        let mut target_tag_idx = None;
+                if let Ok(Some(fw)) = fw_window {
+                    let mut target_monitor_id = None;
+                    let mut target_tag_idx = None;
 
-                        'search: for monitor in state.monitors.values() {
-                            for (i, tag) in monitor.tags.iter().enumerate() {
-                                if tag.window_ids.contains(&fw.window_id) {
-                                    target_monitor_id = Some(monitor.id);
-                                    target_tag_idx = Some(i as u8);
-                                    break 'search;
-                                }
+                    'search: for monitor in state.monitors.values() {
+                        for (i, tag) in monitor.tags.iter().enumerate() {
+                            if tag.window_ids.contains(&fw.window_id) {
+                                target_monitor_id = Some(monitor.id);
+                                target_tag_idx = Some(i as u8);
+                                break 'search;
                             }
                         }
+                    }
 
-                        if let (Some(mid), Some(tag)) = (target_monitor_id, target_tag_idx) {
+                    if let (Some(mid), Some(tag)) = (target_monitor_id, target_tag_idx) {
+                        tracing::info!(
+                            "Window {} belongs to Monitor {} Tag {}. Switching...",
+                            fw.window_id,
+                            mid,
+                            tag
+                        );
+
+                        let mut sync_data = None;
+                        if let Some(monitor) = state.get_monitor_mut(mid) {
+                            monitor.select_tag(tag);
+                            sync_data = Some((
+                                monitor.tags.clone(),
+                                monitor.selected_tags,
+                                monitor.visible_workspace.clone(),
+                            ));
+                        }
+
+                        if let Some((tags, selected_tags, visible_workspace)) = sync_data {
+                            broadcast_state_change(state, mid, event_tx);
+                            let hidden_workspace = state.hidden_workspace.clone();
+
+                            let client = client.clone();
+                            tokio::spawn(async move {
+                                sync_monitor_state(
+                                    &client,
+                                    &tags,
+                                    selected_tags,
+                                    &visible_workspace,
+                                    &hidden_workspace,
+                                )
+                                .await;
+                            });
+                        }
+
+                        // If the focus was on a WRONG monitor (e.g. clicked Dock on Monitor B for window on Monitor A),
+                        // Monitor B is now stuck on "h-xxx". We must restore it to its visible workspace.
+                        if let Ok(Some(current_monitor)) = &fw_monitor
+                            && current_monitor.monitor_id != mid
+                            && let Some(wrong_monitor) =
+                                state.monitors.get(&current_monitor.monitor_id)
+                        {
+                            let restore_ws = wrong_monitor.visible_workspace.clone();
                             tracing::info!(
-                                "Window {} belongs to Monitor {} Tag {}. Switching...",
-                                fw.window_id,
-                                mid,
-                                tag
+                                "Restoring monitor {} from hidden workspace to {}",
+                                current_monitor.monitor_id,
+                                restore_ws
                             );
-
-                            let mut sync_data = None;
-                            if let Some(monitor) = state.get_monitor_mut(mid) {
-                                monitor.select_tag(tag);
-                                sync_data = Some((
-                                    monitor.tags.clone(),
-                                    monitor.selected_tags,
-                                    monitor.visible_workspace.clone(),
-                                ));
-                            }
-
-                            if let Some((tags, selected_tags, visible_workspace)) = sync_data {
-                                broadcast_state_change(state, mid, event_tx);
-                                let hidden_workspace = state.hidden_workspace.clone();
-
-                                let client = client.clone();
-                                tokio::spawn(async move {
-                                    sync_monitor_state(
-                                        &client,
-                                        &tags,
-                                        selected_tags,
-                                        &visible_workspace,
-                                        &hidden_workspace,
-                                    )
-                                    .await;
-                                });
-                            }
-
-                            // If the focus was on a WRONG monitor (e.g. clicked Dock on Monitor B for window on Monitor A),
-                            // Monitor B is now stuck on "h-xxx". We must restore it to its visible workspace.
-                            if let Ok(Some(current_monitor)) = &fw_monitor {
-                                if current_monitor.monitor_id != mid {
-                                    if let Some(wrong_monitor) =
-                                        state.monitors.get(&current_monitor.monitor_id)
-                                    {
-                                        let restore_ws = wrong_monitor.visible_workspace.clone();
-                                        tracing::info!(
-                                            "Restoring monitor {} from hidden workspace to {}",
-                                            current_monitor.monitor_id,
-                                            restore_ws
-                                        );
-                                        let client = client.clone();
-                                        tokio::spawn(async move {
-                                            // Wait a bit to let the primary sync happen first?
-                                            // Or just fire it. AeroSpace queues commands usually.
-                                            let _ = client.focus_workspace(&restore_ws).await;
-                                        });
-                                    }
-                                }
-                            }
-                        } else {
-                            tracing::warn!(
-                                "Focused window {} on hidden workspace not found in state tags.",
-                                fw.window_id
-                            );
+                            let client = client.clone();
+                            tokio::spawn(async move {
+                                // Wait a bit to let the primary sync happen first?
+                                // Or just fire it. AeroSpace queues commands usually.
+                                let _ = client.focus_workspace(&restore_ws).await;
+                            });
                         }
+                    } else {
+                        tracing::warn!(
+                            "Focused window {} on hidden workspace not found in state tags.",
+                            fw.window_id
+                        );
                     }
                 }
             }
         }
-        InternalCommand::HandleSync(Err(e), _, _, _, _, _) => {
+        InternalCommand::Sync(Err(e), _, _, _, _, _) => {
             tracing::error!("Failed to list windows from AeroSpace: {}", e);
         }
-        InternalCommand::HandleSync(_, Err(e), _, _, _, _) => {
+        InternalCommand::Sync(_, Err(e), _, _, _, _) => {
             tracing::error!("Failed to list monitors from AeroSpace: {}", e);
         }
     }
@@ -1326,7 +1315,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Try to toggle Tag 0 for Window 100 (which is the only tag it has)
-        let cmd = InternalCommand::HandleWindowToggle(
+        let cmd = InternalCommand::WindowToggle(
             Some(AerospaceWindow {
                 window_id: 100,
                 app_name: "TestApp".into(),
@@ -1361,7 +1350,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Toggle Tag 0 -> Should be removed because it has Tag 1 also
-        let cmd = InternalCommand::HandleWindowToggle(
+        let cmd = InternalCommand::WindowToggle(
             Some(AerospaceWindow {
                 window_id: 100,
                 app_name: "TestApp".into(),
@@ -1397,7 +1386,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Toggle Tag 1 (Add)
-        let cmd = InternalCommand::HandleWindowToggle(
+        let cmd = InternalCommand::WindowToggle(
             Some(AerospaceWindow {
                 window_id: 100,
                 app_name: "TestApp".into(),
@@ -1430,7 +1419,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Move to Tag 2
-        let cmd = InternalCommand::HandleWindowMove(
+        let cmd = InternalCommand::WindowMove(
             Some(AerospaceWindow {
                 window_id: 100,
                 app_name: "TestApp".into(),
@@ -1465,7 +1454,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // View Tag 2 (index 2, mask 4)
-        let cmd = InternalCommand::HandleTagView(
+        let cmd = InternalCommand::TagView(
             Some(AerospaceMonitor {
                 monitor_id: 1,
                 monitor_name: "Main".into(),
@@ -1490,7 +1479,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Toggle Tag 1 (mask 2). Expected: 1 | 2 = 3
-        let cmd = InternalCommand::HandleTagToggle(
+        let cmd = InternalCommand::TagToggle(
             Some(AerospaceMonitor {
                 monitor_id: 1,
                 monitor_name: "Main".into(),
@@ -1524,7 +1513,7 @@ mod tests {
             monitor_name: "Main".into(),
         });
 
-        let cmd = InternalCommand::HandleQuery(None, focused_monitor, QueryTarget::State, tx_write);
+        let cmd = InternalCommand::Query(None, focused_monitor, QueryTarget::State, tx_write);
 
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
@@ -1550,7 +1539,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Set Window 100 tags to mask 6 (Tag 1 and Tag 2)
-        let cmd = InternalCommand::HandleWindowSet(
+        let cmd = InternalCommand::WindowSet(
             None,
             Some(AerospaceMonitor {
                 monitor_id: 1,
@@ -1579,7 +1568,7 @@ mod tests {
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
         // Set Monitor 1 tags to mask 5 (Tag 0 and Tag 2)
-        let cmd = InternalCommand::HandleTagSet(None, 5, Some(1));
+        let cmd = InternalCommand::TagSet(None, 5, Some(1));
 
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
@@ -1611,7 +1600,7 @@ mod tests {
         let client: Arc<dyn AerospaceClient> = Arc::new(mock);
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
-        let cmd = InternalCommand::HandleWindowMoveMonitor(
+        let cmd = InternalCommand::WindowMoveMonitor(
             Some(AerospaceWindow {
                 window_id: 100,
                 app_name: "App".into(),
