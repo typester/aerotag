@@ -1682,19 +1682,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_window_toggle_normal() {
+    async fn test_window_toggle_add() {
         let mut state = State::new();
         let mut monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
-        // Window 100 is in Tag 0 AND Tag 1
         monitor.tags[0].window_ids.push(100);
-        monitor.tags[1].window_ids.push(100);
         state.monitors.insert(1, monitor);
 
         let mock = MockAerospaceClient::new();
         let client: Arc<dyn AerospaceClient> = Arc::new(mock);
         let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
 
-        // Toggle Tag 0 -> Should be removed because it has Tag 1 also
+        // Toggle Tag 1 (Add)
         let cmd = InternalCommand::HandleWindowToggle(
             Some(AerospaceWindow {
                 window_id: 100,
@@ -1703,19 +1701,142 @@ mod tests {
                 workspace: None,
             }),
             None,
-            0,
+            1,
         );
 
         handle_internal_command(&mut state, cmd, &event_tx, client);
 
         let m = state.monitors.get(&1).unwrap();
-        assert!(
-            !m.tags[0].window_ids.contains(&100),
-            "Window should be removed from Tag 0"
+        assert!(m.tags[0].window_ids.contains(&100));
+        assert!(m.tags[1].window_ids.contains(&100), "Window should be added to Tag 1");
+    }
+
+    #[tokio::test]
+    async fn test_window_move() {
+        let mut state = State::new();
+        let mut monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        monitor.tags[0].window_ids.push(100);
+        state.monitors.insert(1, monitor);
+
+        let mock = MockAerospaceClient::new();
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        // Move to Tag 2
+        let cmd = InternalCommand::HandleWindowMove(
+            Some(AerospaceWindow {
+                window_id: 100,
+                app_name: "TestApp".into(),
+                window_title: "TestWindow".into(),
+                workspace: None,
+            }),
+            None,
+            2,
         );
-        assert!(
-            m.tags[1].window_ids.contains(&100),
-            "Window should remain in Tag 1"
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        let m = state.monitors.get(&1).unwrap();
+        assert!(!m.tags[0].window_ids.contains(&100), "Should be removed from Tag 0");
+        assert!(m.tags[2].window_ids.contains(&100), "Should be added to Tag 2");
+    }
+
+    #[tokio::test]
+    async fn test_tag_view() {
+        let mut state = State::new();
+        let monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        state.monitors.insert(1, monitor); // Default selected: Tag 0 (mask 1)
+
+        let mock = MockAerospaceClient::new();
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        // View Tag 2 (index 2, mask 4)
+        let cmd = InternalCommand::HandleTagView(
+            Some(AerospaceMonitor {
+                monitor_id: 1,
+                monitor_name: "Main".into(),
+            }),
+            2,
         );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        let m = state.monitors.get(&1).unwrap();
+        assert_eq!(m.selected_tags, 1 << 2);
+    }
+
+    #[tokio::test]
+    async fn test_tag_toggle() {
+        let mut state = State::new();
+        let monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        state.monitors.insert(1, monitor); // Default selected: Tag 0 (mask 1)
+
+        let mock = MockAerospaceClient::new();
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        // Toggle Tag 1 (mask 2). Expected: 1 | 2 = 3
+        let cmd = InternalCommand::HandleTagToggle(
+            Some(AerospaceMonitor {
+                monitor_id: 1,
+                monitor_name: "Main".into(),
+            }),
+            1,
+        );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        let m = state.monitors.get(&1).unwrap();
+        assert_eq!(m.selected_tags, 1 | 2);
+    }
+
+    #[tokio::test]
+    async fn test_query_state() {
+        let mut state = State::new();
+        let monitor = Monitor::new(1, "Main".to_string(), "1".to_string());
+        state.monitors.insert(1, monitor);
+
+        // Mock setup for focus info
+        let mut mock = MockAerospaceClient::new();
+        // Since we pass None for focused_window/monitor in HandleQuery command below,
+        // the logic inside HandleQuery logic doesn't call client calls.
+        // Wait, HandleQuery logic uses `focused_monitor` passed in arguments.
+        // It's `handle_query_client_async` that calls client.
+        // `handle_internal_command` receives the result.
+        // So we don't need to mock client calls here if we pass the data manually to InternalCommand!
+        
+        let client: Arc<dyn AerospaceClient> = Arc::new(mock);
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+
+        let (stream_tx, stream_rx) = UnixStream::pair().unwrap();
+        let (mut _rx_read, mut tx_write) = stream_tx.into_split(); // We need OwnedWriteHalf to pass
+        // But UnixStream::pair() returns (UnixStream, UnixStream).
+        // stream_tx is a Stream.
+        // InternalCommand expects OwnedWriteHalf.
+        // stream_tx.into_split() gives (OwnedReadHalf, OwnedWriteHalf).
+        
+        let focused_monitor = Some(AerospaceMonitor {
+            monitor_id: 1,
+            monitor_name: "Main".into(),
+        });
+
+        let cmd = InternalCommand::HandleQuery(
+            None,
+            focused_monitor,
+            QueryTarget::State,
+            tx_write,
+        );
+
+        handle_internal_command(&mut state, cmd, &event_tx, client);
+
+        // Read response
+        let mut reader = tokio::io::BufReader::new(stream_rx);
+        let mut buf = String::new();
+        reader.read_to_string(&mut buf).await.unwrap();
+
+        let json: serde_json::Value = serde_json::from_str(&buf).unwrap();
+        assert_eq!(json["focused_monitor_id"], 1);
+        assert!(json["monitors"]["1"].is_object());
     }
 }
