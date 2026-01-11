@@ -1,9 +1,10 @@
+use serde::Serialize;
 use std::collections::HashMap;
 
 pub type WindowId = u32;
 pub type MonitorId = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct WindowInfo {
     pub id: WindowId,
