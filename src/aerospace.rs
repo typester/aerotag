@@ -38,6 +38,12 @@ pub async fn list_windows() -> anyhow::Result<Vec<AerospaceWindow>> {
     Ok(windows)
 }
 
+pub async fn list_windows_in_workspace(workspace: &str) -> anyhow::Result<Vec<AerospaceWindow>> {
+    let output = run_command(&["list-windows", "--workspace", workspace, "--json"]).await?;
+    let windows: Vec<AerospaceWindow> = serde_json::from_str(&output)?;
+    Ok(windows)
+}
+
 #[allow(dead_code)]
 pub async fn list_workspaces() -> anyhow::Result<Vec<AerospaceWorkspace>> {
     let output = run_command(&["list-workspaces", "--all", "--json"]).await?;

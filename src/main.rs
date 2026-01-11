@@ -224,12 +224,8 @@ async fn run_server() -> anyhow::Result<()> {
     let event_tx_clone = event_tx.clone();
     let actor_tx = tx.clone(); // Clone for internal messages
     tokio::spawn(async move {
-        // Force-reset monitor workspaces on startup to ensure clean state
-        // Monitor N -> Workspace N
         if let Ok(monitors) = aerospace::list_monitors().await {
-            for m in &monitors {
-                initialize_monitor(m.monitor_id).await;
-            }
+            initialize_all_monitors(&monitors).await;
         }
 
         let mut state = State::new();
@@ -790,7 +786,8 @@ fn handle_internal_command(
                 monitors.iter().map(|m| m.monitor_id).collect();
 
             // Add or update monitors
-            for m in monitors {
+            let mut new_monitor_detected = false;
+            for m in &monitors {
                 let visible_ws = visible_workspaces
                     .get(&m.monitor_id)
                     .cloned()
@@ -807,7 +804,7 @@ fn handle_internal_command(
                         monitor.visible_workspace = visible_ws.clone();
                     }
                 } else {
-                    // New monitor detected
+                    new_monitor_detected = true;
                     let initial_ws = if visible_ws.starts_with("h-") {
                         m.monitor_id.to_string()
                     } else {
@@ -822,13 +819,14 @@ fn handle_internal_command(
                         m.monitor_id,
                         Monitor::new(m.monitor_id, m.monitor_name.clone(), initial_ws.clone()),
                     );
-
-                    // Initialize the new monitor asynchronously
-                    let monitor_id = m.monitor_id;
-                    tokio::spawn(async move {
-                        initialize_monitor(monitor_id).await;
-                    });
                 }
+            }
+
+            if new_monitor_detected {
+                let monitors_clone = monitors.clone();
+                tokio::spawn(async move {
+                    initialize_all_monitors(&monitors_clone).await;
+                });
             }
             let removed_monitor_ids: Vec<u32> = state
                 .monitors
@@ -1131,16 +1129,71 @@ async fn sync_monitor_state(
     }
 }
 
-async fn initialize_monitor(monitor_id: u32) {
-    let ws_name = monitor_id.to_string();
+async fn initialize_all_monitors(monitors: &[AerospaceMonitor]) {
+    if monitors.is_empty() {
+        return;
+    }
+
+    let mut sorted: Vec<_> = monitors.to_vec();
+    sorted.sort_by_key(|m| m.monitor_id);
+
+    let mut current_state: std::collections::HashMap<u32, String> =
+        std::collections::HashMap::new();
+    for m in &sorted {
+        if let Ok(ws) = aerospace::get_visible_workspace(m.monitor_id).await {
+            current_state.insert(m.monitor_id, ws);
+        }
+    }
+
+    let already_aligned = sorted.iter().all(|m| {
+        current_state
+            .get(&m.monitor_id)
+            .map(|ws| ws == &m.monitor_id.to_string())
+            .unwrap_or(false)
+    });
+
+    if already_aligned {
+        tracing::debug!("All monitors already aligned");
+        return;
+    }
+
     tracing::info!(
-        "Initializing: Monitor {} -> Workspace {}",
-        monitor_id,
-        ws_name
+        "Realigning workspaces: current={:?}, expected={:?}",
+        current_state,
+        sorted
+            .iter()
+            .map(|m| (m.monitor_id, m.monitor_id.to_string()))
+            .collect::<Vec<_>>()
     );
-    let _ = aerospace::focus_monitor(monitor_id).await;
-    let _ = aerospace::focus_workspace(&ws_name).await;
-    let _ = aerospace::move_workspace_to_monitor(&ws_name, monitor_id).await;
+
+    // Ensure all required workspaces exist by focusing them once
+    for m in &sorted {
+        let ws_name = m.monitor_id.to_string();
+        let _ = aerospace::focus_workspace(&ws_name).await;
+    }
+
+    // Explicitly move each workspace to its correct monitor
+    for m in &sorted {
+        let ws_name = m.monitor_id.to_string();
+        tracing::debug!("Moving workspace {} to monitor {}", ws_name, m.monitor_id);
+        let _ = aerospace::move_workspace_to_monitor(&ws_name, m.monitor_id).await;
+    }
+
+    // Focus each monitor on its correct workspace
+    for m in &sorted {
+        let ws_name = m.monitor_id.to_string();
+        let _ = aerospace::focus_monitor(m.monitor_id).await;
+        let _ = aerospace::focus_workspace(&ws_name).await;
+    }
+
+    // Focus the primary monitor (lowest ID) so user sees the change
+    if let Some(primary) = sorted.first() {
+        tracing::info!("Focusing primary monitor {}", primary.monitor_id);
+        let _ = aerospace::focus_monitor(primary.monitor_id).await;
+        let _ = aerospace::focus_workspace(&primary.monitor_id.to_string()).await;
+    }
+
+    tracing::info!("Workspace realignment complete");
 }
 
 async fn send_client_command(cmd: IpcCommand) -> anyhow::Result<()> {
