@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/typester/aerotag/compare/v0.4.1...v0.4.2) - 2026-01-11
+
+### Other
+
+- move tokio::spawn to callers and apply clippy fixes ([#18](https://github.com/typester/aerotag/pull/18))
+
 ## [0.4.1](https://github.com/typester/aerotag/compare/v0.4.0...v0.4.1) - 2026-01-11
 
 ### Other
