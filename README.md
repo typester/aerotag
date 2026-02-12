@@ -1,5 +1,7 @@
 # AeroTag
 
+> **Note:** This project is no longer actively developed. Development has moved to [Yashiki](https://github.com/typester/yashiki).
+
 **Tag-based workspace management for [AeroSpace](https://github.com/nikitabobko/AeroSpace).**
 
 `aerotag` brings the power of dynamic tagging (inspired by [AwesomeWM](https://awesomewm.org/), [River](https://awesomewm.org/), etc.) to macOS. Instead of rigid workspaces, you assign tags to windows and dynamically view any combination of them.
